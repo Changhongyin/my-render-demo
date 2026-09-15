@@ -1,18 +1,7 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import json
 import random
 
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], 
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.get("/api/data")
-def get_scraped_data():
+def main_handler(event, context):
     mock_data = {
         "source": "模拟官网抓取数据",
         "items": [
@@ -20,4 +9,19 @@ def get_scraped_data():
             {"id": 2, "name": f"商品B_{random.randint(100, 999)}", "price": 59.9},
         ]
     }
-    return {"code": 200, "data": mock_data}
+    
+    response = {
+        "code": 200,
+        "data": mock_data
+    }
+    
+    return {
+        "statusCode": 200,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type"
+        },
+        "body": json.dumps(response, ensure_ascii=False)
+    }

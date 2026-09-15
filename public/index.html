@@ -25,14 +25,15 @@
     </div>
 
     <script>
-        const apiUrl = '';
+        // 【重要】请在部署云函数成功后，将下面的 URL 替换为腾讯云提供的云函数真实触发地址！
+        const API_URL = 'https://请替换为你的云函数真实访问地址';
         
         document.addEventListener('DOMContentLoaded', () => {
             const loadingEl = document.getElementById('loading');
             const listEl = document.getElementById('data-list');
             const errorEl = document.getElementById('error-msg');
 
-            fetch(`${apiUrl}/api/data`)
+            fetch(API_URL)
                 .then(response => {
                     if (!response.ok) {
                         throw new Error('网络请求失败');
@@ -41,6 +42,7 @@
                 })
                 .then(res => {
                     loadingEl.style.display = 'none';
+                    // 腾讯云云函数返回的数据被包裹在 body 字段里，SCF已经自动帮我们解析成了JSON
                     if (res.code === 200 && res.data && res.data.items) {
                         const itemsHtml = res.data.items.map(item => `
                             <div class="item">
