@@ -14,6 +14,8 @@
         .price { color: #e74c3c; font-weight: bold; }
         .status { text-align: center; color: #7f8c8d; margin: 20px 0; }
         .error { color: #e74c3c; font-weight: bold; }
+        .retry-btn { display: none; margin: 20px auto 0 auto; padding: 10px 20px; background: #3498db; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; }
+        .retry-btn:disabled { background: #95a5a6; cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -22,45 +24,68 @@
         <div id="loading" class="status">正在获取数据...</div>
         <div id="data-list"></div>
         <div id="error-msg" class="status error"></div>
+        <button id="retry-btn" class="retry-btn" onclick="loadData()">重新尝试</button>
     </div>
 
     <script>
-        // 【重要】请在部署云函数成功后，将下面的 URL 替换为腾讯云提供的云函数真实触发地址！
-        const API_URL = 'https://请替换为你的云函数真实访问地址';
-        
-        document.addEventListener('DOMContentLoaded', () => {
-            const loadingEl = document.getElementById('loading');
-            const listEl = document.getElementById('data-list');
-            const errorEl = document.getElementById('error-msg');
+        const API_URL = 'https://my-render-demo-d2g394trhe6ae0726-1489026908.ap-shanghai.app.tcloudbase.com/api/data';
+        const loadingEl = document.getElementById('loading');
+        const listEl = document.getElementById('data-list');
+        const errorEl = document.getElementById('error-msg');
+        const retryBtn = document.getElementById('retry-btn');
 
-            fetch(API_URL)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('网络请求失败');
-                    }
-                    return response.json();
-                })
-                .then(res => {
-                    loadingEl.style.display = 'none';
-                    // 腾讯云云函数返回的数据被包裹在 body 字段里，SCF已经自动帮我们解析成了JSON
-                    if (res.code === 200 && res.data && res.data.items) {
-                        const itemsHtml = res.data.items.map(item => `
-                            <div class="item">
-                                <span class="name">${item.name}</span>
-                                <span class="price">¥${item.price}</span>
-                            </div>
-                        `).join('');
-                        listEl.innerHTML = itemsHtml;
-                    } else {
-                        errorEl.textContent = '数据格式异常，请检查后端返回';
-                    }
-                })
-                .catch(err => {
-                    loadingEl.style.display = 'none';
-                    console.error('请求失败:', err);
+        async function loadData() {
+            loadingEl.style.display = 'block';
+            listEl.innerHTML = '';
+            errorEl.textContent = '';
+            retryBtn.style.display = 'none';
+            retryBtn.disabled = true;
+
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+                const response = await fetch(API_URL, { signal: controller.signal });
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error('网络请求失败');
+                }
+
+                const res = await response.json();
+                loadingEl.style.display = 'none';
+
+                if (res.code === 200 && res.data && res.data.items) {
+                    const itemsHtml = res.data.items.map(item => `
+                        <div class="item">
+                            <span class="name">${item.name || '未知商品'}</span>
+                            <span class="price">${item.price ? '¥' + item.price : '价格面议'}</span>
+                        </div>
+                    `).join('');
+                    listEl.innerHTML = itemsHtml;
+                } else if (res.code === 429) {
+                    errorEl.textContent = '操作过于频繁，请稍后再试。';
+                    retryBtn.style.display = 'block';
+                    retryBtn.disabled = false;
+                } else {
+                    errorEl.textContent = res.msg || '数据格式异常';
+                    retryBtn.style.display = 'block';
+                    retryBtn.disabled = false;
+                }
+            } catch (err) {
+                loadingEl.style.display = 'none';
+                if (err.name === 'AbortError') {
+                    errorEl.textContent = '请求超时，服务器响应较慢，请重试。';
+                } else {
                     errorEl.textContent = '无法连接到后端服务，请稍后再试。';
-                });
-        });
+                }
+                retryBtn.style.display = 'block';
+                retryBtn.disabled = false;
+                console.error('请求失败:', err);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadData);
     </script>
 </body>
 </html>
