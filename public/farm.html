@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>前端测试页面</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; background-color: #f4f4f9; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #2c3e50; }
+        .section { margin-bottom: 20px; padding: 15px; border: 1px solid #eee; border-radius: 5px; }
+        .section-title { font-weight: bold; color: #34495e; margin-bottom: 10px; }
+        .item { border-bottom: 1px solid #eee; padding: 10px 0; display: flex; justify-content: space-between; }
+        .item:last-child { border-bottom: none; }
+        .price { color: #e74c3c; font-weight: bold; }
+        .status { text-align: center; color: #7f8c8d; margin: 20px 0; }
+        .error { color: #e74c3c; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>抓取数据展示（本地测试版）</h1>
+        <div id="loading" class="status">正在读取数据...</div>
+        
+        <div id="data-content" style="display:none;">
+            <div class="section">
+                <div class="section-title">作物基本信息</div>
+                <div id="crop-info"></div>
+            </div>
+            <div class="section">
+                <div class="section-title">价格行情</div>
+                <div id="price-info"></div>
+            </div>
+            <div class="section">
+                <div class="section-title">新闻动态</div>
+                <div id="news-list"></div>
+            </div>
+            <div class="section">
+                <div class="section-title">市场分析</div>
+                <div id="analysis-text"></div>
+            </div>
+            <div class="section">
+                <div class="section-title">行情走势</div>
+                <div id="chart-data"></div>
+            </div>
+        </div>
+        <div id="error-msg" class="status error"></div>
+    </div>
+
+    <script>
+        // 这里就是我们刚定义的那个完整数据结构的硬编码版本
+        // 前端同学可以直接把这个结构拿去写渲染逻辑
+        const mockData = {
+            "code": 200,
+            "msg": "success",
+            "data": {
+                "crop_basic_info": {
+                    "crop_name": "玉米",
+                    "scientific_name": "Zea mays L.",
+                    "category": "粮食作物-谷物类",
+                    "suitable_region": "北方各省、西南地区",
+                    "growth_cycle_days": 120,
+                    "planting_season": "春播、夏播",
+                    "main_production_areas": "黑龙江、吉林、河南",
+                    "pests_diseases": "玉米螟、草地贪夜蛾、大斑病",
+                    "soil_requirement": "壤土、pH 6.0-7.0",
+                    "remark": "---"
+                },
+                "price_info": {
+                    "latest_price": 2.62,
+                    "unit": "元/公斤",
+                    "price_change": "-0.76%",
+                    "volume": "18.2万吨",
+                    "update_time": "2026-08-27"
+                },
+                "news": {
+                    "policy": ["农业农村部部署全国秋粮生产工作", "三部门联合开展农资打假专项行动", "全国农田水利建设会议在京召开"],
+                    "market": ["预制菜产业规模持续扩大，蔬菜订单种植火了", "农业无人机作业面积创新高，打药省一半钱", "冷链物流进村，生鲜损耗率大幅下降"],
+                    "local": ["山东寿光蔬菜大棚用上'云种植'", "四川建成首个万亩智慧果园", "河南小麦单产再创历史新高"]
+                },
+                "analysis": {
+                    "warning": {
+                        "price_warning": ["个品种价格涨跌不正常，提前给您提个醒。", "大姜价格半个月涨了两成多，主要是主产区下雨减产，手里有货的可以抓住机会出手，没有货的注意不要盲目跟风。", "生菜价格最近跌得有点快，新菜大量上市，压货的朋友注意别砸在手里。"],
+                        "supply_warning": ["可能有哪些新品种的品种，提前打个招呼。", "今年北方白菜种植比往年多，集中上市时价格可能上不去，建议错峰上市。", "大蒜库存比往年偏少，价格可能稳中有涨，有货的不用急着卖。"],
+                        "market_risk": ["市场炒作，假消息的代价，帮您避坑。", "买种子化肥认准正规门店和发票，网上超低价的多年假货，发现假冒可打12316举报。", "小心'高价回收'骗局：有人打着签合同包回收的旗号卖高价种苗，收了钱就联系不上，先多打听再掏钱。"]
+                    },
+                    "market_forecast": {
+                        "interpretation": "玉米新粮陆续上市，价格近日略有回落，属于正常的季节性波动，不用慌。",
+                        "supply_demand": "东北、华北新玉米集中上市，短期供应充足，贸易商观望情绪重，收购节奏偏慢。",
+                        "forecast": "预计上市高峰过后价格会缓慢企稳回升，大幅下跌的空间有限。",
+                        "advice": "该咋干：不急着用钱的先把粮食存好，等价格企稳再出手；着急卖的按本地收购价高的时候出手。"
+                    }
+                },
+                "chart_data": [
+                    { "date": "7/30", "price": 2.55 },
+                    { "date": "8/01", "price": 2.60 },
+                    { "date": "8/05", "price": 2.69 },
+                    { "date": "8/27", "price": 2.62 }
+                ]
+            }
+        };
+
+        // 简单的渲染逻辑，验证数据能否被UI吸收
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('data-content').style.display = 'block';
+
+            const d = mockData.data;
+
+            // 1. 基本信息
+            document.getElementById('crop-info').innerHTML = `
+                <p>作物：${d.crop_basic_info.crop_name}（${d.crop_basic_info.scientific_name}）</p>
+                <p>生长周期：${d.crop_basic_info.growth_cycle_days} 天</p>
+                <p>主要产区：${d.crop_basic_info.main_production_areas}</p>
+            `;
+
+            // 2. 价格信息
+            document.getElementById('price-info').innerHTML = `
+                <div class="item"><span>最新价：</span><span class="price">${d.price_info.latest_price} ${d.price_info.unit}</span></div>
+                <div class="item"><span>涨跌幅：</span><span>${d.price_info.price_change}</span></div>
+                <div class="item"><span>成交量：</span><span>${d.price_info.volume}</span></div>
+            `;
+
+            // 3. 新闻列表
+            let newsHtml = '';
+            d.news.policy.forEach(n => newsHtml += `<div class="item">${n}</div>`);
+            d.news.market.forEach(n => newsHtml += `<div class="item">${n}</div>`);
+            d.news.local.forEach(n => newsHtml += `<div class="item">${n}</div>`);
+            document.getElementById('news-list').innerHTML = newsHtml;
+
+            // 4. 市场分析
+            document.getElementById('analysis-text').innerHTML = `
+                <p><strong>行情解读：</strong>${d.analysis.market_forecast.interpretation}</p>
+                <p><strong>后市预测：</strong>${d.analysis.market_forecast.forecast}</p>
+            `;
+
+            // 5. 走势图数据（这里只展示数据，实际图表由前端同学用 ECharts 等库绘制）
+            let chartHtml = '';
+            d.chart_data.forEach(c => chartHtml += `<span style="margin-right:10px;">${c.date}: ¥${c.price}</span>`);
+            document.getElementById('chart-data').innerHTML = chartHtml;
+        });
+    </script>
+</body>
+</html>
