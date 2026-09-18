@@ -42,6 +42,11 @@
         .badge.badge-demo { background: #fff3cd; color: #8a6d3b; border-color: #ffe08a; font-weight: bold; }
         /* 数据统计截止时间（体现数据时效性） */
         .stat-time { display: none; margin: 8px 0 0; font-size: 13px; text-align: center; color: var(--muted); }
+        /* 数据状态提示：历史累积进度 / 模拟补齐标注（诚实披露，必须显示） */
+        .note { display: none; margin: 10px auto 0; width: fit-content; padding: 4px 12px; border-radius: 8px; font-size: 12px; line-height: 1.6; text-align: center; background: #f4f6f7; color: #7a8b99; }
+        .note.note-warn { background: #fff8e1; color: #8a6d3b; border: 1px solid #ffe08a; }
+        /* 条目上的「本次未更新」标记 */
+        .stale { padding: 1px 6px; font-size: 11px; color: #b26a00; background: #fff3e0; border: 1px solid #ffcc80; border-radius: 4px; }
         /* 行情卡片 */
         .section-card { margin-top: 16px; padding: 14px 14px 4px; background: #fbfdfc; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 1px 2px rgba(16, 42, 30, .04); }
         .section-title { margin-bottom: 4px; padding-left: 10px; font-size: 17px; font-weight: 700; color: var(--brand-dark); border-left: 5px solid var(--brand); }
@@ -76,6 +81,8 @@
         <div id="location-info" class="sub-title">正在定位...</div>
         <div id="source-badge" class="badge"></div>
         <div id="stat-time" class="stat-time"></div>
+        <div id="accumulate-note" class="note"></div>
+        <div id="synthetic-note" class="note note-warn"></div>
         <div id="loading" class="status">正在获取数据...</div>
 
         <!-- 骨架屏：页面首屏就有内容感，不会空荡荡地干等 -->
@@ -92,9 +99,9 @@
         <div id="error-msg" class="status error"></div>
         <button id="retry-btn" class="retry-btn" onclick="loadData()">重新尝试</button>
 
-        <!-- 数据来源说明：答辩时用来交代数据现状与架构就绪度。
-             注意：将来接入真实数据源后，这段文案要同步改掉，别让它继续写着"演示数据"。 -->
-        <p class="data-source-note">数据来源：演示数据，用于UI/UX原型展示。前端架构已就绪，可随时接入官方 API 或真实数据源。</p>
+        <!-- 数据来源说明：这段文案现在由 JS 跟着 meta.source 自动填，
+             不再需要人工维护（下面是拿不到元信息时的兜底文案）。 -->
+        <p id="source-note" class="data-source-note">数据来源以实际抓取结果为准。前端架构已就绪，可随时接入官方 API 或真实数据源。</p>
     </div>
 
     <script>
@@ -107,13 +114,63 @@
         const statTimeEl = document.getElementById('stat-time');
         const skeletonEl = document.getElementById('skeleton');
 
-        // 数据来源角标：只有带元信息的「对象格式」才显示，旧的纯数组格式保持原样不显示。
-        // 例如 {"source": "演示数据", "fetched_at": "2026-09-18"} -> ⚠ 演示数据 · 数据时间：2026-09-18
-        function renderBadge(payload) {
-            const meta = (payload && !Array.isArray(payload)) ? payload : {};
+        const accumulateEl = document.getElementById('accumulate-note');
+        const syntheticEl = document.getElementById('synthetic-note');
+        const sourceNoteEl = document.getElementById('source-note');
+
+        /* ==================== 一、数据格式适配 ====================
+           这个页面要能同时吃三种格式（新前端产出的 / 早期版本的 / 最早的），
+           统一成 { meta, items:[{name,grade,price,date,stale}] } 再渲染：
+             ① v2 新格式：{ meta:{...}, crops:[{ name, grade, latest, date, stale, ... }] }
+             ② v1 旧格式：{ location, source, fetched_at, stat_time, items:[{ name, level, price, date }] }
+             ③ 最早格式：顶层直接是数组 */
+
+        function adaptCrop(crop) {
+            return {
+                name: crop.name,
+                grade: crop.grade,        // v2 里等级叫 grade
+                price: crop.latest,       // v2 里价格叫 latest
+                date: crop.date,
+                stale: crop.stale === true,
+                lastUpdated: crop.last_updated
+            };
+        }
+
+        function adaptItem(item) {
+            return {
+                name: item.name,
+                grade: item.level,        // 旧格式里等级叫 level
+                price: item.price,
+                date: item.date,
+                stale: false
+            };
+        }
+
+        function normalize(payload) {
+            if (Array.isArray(payload)) {
+                return { meta: {}, items: payload.map(adaptItem) };
+            }
+            if (!payload || typeof payload !== 'object') {
+                return { meta: {}, items: [] };
+            }
+            // v2：元信息嵌在 payload.meta 里，数据在 payload.crops 里
+            if (Array.isArray(payload.crops)) {
+                return { meta: payload.meta || {}, items: payload.crops.map(adaptCrop) };
+            }
+            // v1：元信息就在顶层，数据在 payload.items 里
+            if (Array.isArray(payload.items)) {
+                return { meta: payload, items: payload.items.map(adaptItem) };
+            }
+            return { meta: {}, items: [] };
+        }
+
+        /* ==================== 二、顶部信息渲染 ==================== */
+
+        // 数据来源角标：带元信息时才显示
+        function renderBadge(meta) {
             const parts = [];
             if (meta.source) parts.push(meta.source);
-            if (meta.fetched_at) parts.push('数据时间：' + meta.fetched_at);
+            if (meta.fetched_at) parts.push('抓取时间：' + meta.fetched_at);
 
             if (parts.length === 0) {
                 badgeEl.className = 'badge';
@@ -122,17 +179,15 @@
                 return;
             }
 
-            // 演示/测试数据用醒目样式提醒，真实抓取的数据保持低调
-            const isDemo = /演示|测试|mock|sample/i.test(meta.source || '');
+            // 「演示 / 模拟 / 测试」这类数据用醒目样式提醒；真实抓取保持低调
+            const isDemo = /演示|模拟|测试|mock|sample/i.test(meta.source || '');
             badgeEl.className = isDemo ? 'badge badge-demo' : 'badge';
             badgeEl.textContent = (isDemo ? '⚠ ' : '') + parts.join(' · ');
             badgeEl.style.display = 'block';
         }
 
-        // 数据统计截止时间：答辩时用来体现数据的时效性。
-        // 用 textContent 赋值（不是 innerHTML），天然不存在注入问题。
-        function renderStatTime(payload) {
-            const meta = (payload && !Array.isArray(payload)) ? payload : {};
+        // 数据统计截止时间（用 textContent 赋值，天然不存在注入问题）
+        function renderStatTime(meta) {
             if (!meta.stat_time) {
                 statTimeEl.textContent = '';
                 statTimeEl.style.display = 'none';
@@ -140,6 +195,35 @@
             }
             statTimeEl.textContent = '数据统计截止时间：' + meta.stat_time;
             statTimeEl.style.display = 'block';
+        }
+
+        // 累积进度 + 模拟补齐披露 —— 这两条是数据诚实性的底线，必须显示出来
+        function renderNotes(meta) {
+            if (meta.degraded && meta.series_days) {
+                accumulateEl.textContent = '历史数据累积中：' + meta.series_days + ' / '
+                    + (meta.series_target || 90) + ' 天';
+                accumulateEl.style.display = 'block';
+            } else {
+                accumulateEl.textContent = '';
+                accumulateEl.style.display = 'none';
+            }
+
+            if (meta.synthetic_history) {
+                syntheticEl.textContent = '⚠️ 图表历史段含模拟补齐数据（每品种前 '
+                    + (meta.synthetic_prefix_len || 0) + ' 个点），仅用于展示形态，不是真实抓取结果';
+                syntheticEl.style.display = 'block';
+            } else {
+                syntheticEl.textContent = '';
+                syntheticEl.style.display = 'none';
+            }
+        }
+
+        // 页脚来源说明：跟着 meta.source 自动生成，不用再手工改文案
+        const DEFAULT_SOURCE_NOTE = sourceNoteEl.textContent;
+        function renderSourceNote(meta) {
+            sourceNoteEl.textContent = meta.source
+                ? '数据来源：' + meta.source + '。前端架构已就绪，可随时接入官方 API 或真实数据源。'
+                : DEFAULT_SOURCE_NOTE;
         }
 
         // 安全过滤：凡是要拼进 innerHTML 的数据，必须先用它转义。
@@ -166,29 +250,30 @@
             badgeEl.style.display = 'none';
             statTimeEl.textContent = '';
             statTimeEl.style.display = 'none';
+            accumulateEl.style.display = 'none';
+            syntheticEl.style.display = 'none';
             skeletonEl.style.display = 'block';   // 先把骨架屏亮出来，避免页面空白
 
             try {
-                // 【核心优化】直接请求静态托管根目录下的 data.json
-                // 加上 ?t=Date.now() 是为了强行绕过浏览器的缓存，保证每次看到最新抓取的数据
+                // 直接请求静态托管根目录下的 data.json
+                // ?t=Date.now() 强行绕过 CDN/浏览器缓存，保证看到最新抓取结果
                 const response = await fetch('/data.json?t=' + Date.now());
                 if (!response.ok) throw new Error('无法获取 data.json，请检查是否上传。');
 
-                // 解析 JSON，同时兼容两种格式：
-                //   ① 新格式 {location, source, fetched_at, items}
-                //   ② 旧格式（顶层就是数组）
                 const payload = await response.json();
                 loadingEl.style.display = 'none';
                 skeletonEl.style.display = 'none';   // 数据到手，收起骨架屏
 
-                const items = Array.isArray(payload)
-                    ? payload
-                    : (payload && Array.isArray(payload.items) ? payload.items : []);
-                const locationName = (!Array.isArray(payload) && payload.location) ? payload.location : '全国';
+                const normalized = normalize(payload);
+                const meta = normalized.meta;
+                const items = normalized.items;
 
-                locationInfo.textContent = `📍 ${locationName} | 🌾 粮油行情`;
-                renderBadge(payload);
-                renderStatTime(payload);
+                locationInfo.textContent = `📍 ${meta.location || '全国'} | 🌾 粮油行情`;
+
+                renderBadge(meta);
+                renderStatTime(meta);
+                renderNotes(meta);
+                renderSourceNote(meta);
 
                 if (items.length > 0) {
                     const card = document.createElement('div');
@@ -197,18 +282,23 @@
                     let contentHtml = '';
                     // 【安全】所有来自 data.json 的字段一律先 escapeHtml 再拼接，杜绝 XSS
                     items.forEach(item => {
-                        // 等级为「无」或空值时，不渲染绿色胶囊标签（否则会出现一个写着"无"的怪标签）
-                        const levelText = (item.level === null || item.level === undefined)
+                        // 等级为「无」或空值时，不渲染绿色胶囊标签（否则会出现写着"无"的怪标签）
+                        const gradeText = (item.grade === null || item.grade === undefined)
                             ? ''
-                            : String(item.level).trim();
-                        const levelHtml = (levelText && levelText !== '无')
-                            ? `<span class="level">${escapeHtml(levelText)}</span>`
+                            : String(item.grade).trim();
+                        const gradeHtml = (gradeText && gradeText !== '无')
+                            ? `<span class="level">${escapeHtml(gradeText)}</span>`
+                            : '';
+                        // 本次没抓到的品种，价格是沿用的上一期，必须标出来
+                        const staleHtml = item.stale
+                            ? `<span class="stale">本次未更新${item.lastUpdated ? '（' + escapeHtml(item.lastUpdated) + '）' : ''}</span>`
                             : '';
 
                         contentHtml += `
                             <div class="item">
                                 <span class="name">${escapeHtml(item.name)}</span>
-                                ${levelHtml}
+                                ${gradeHtml}
+                                ${staleHtml}
                                 <span class="price">¥${escapeHtml(item.price)}</span>
                                 <span class="date">${escapeHtml(item.date)}</span>
                             </div>
@@ -216,7 +306,7 @@
                     });
 
                     card.innerHTML = `
-                        <div class="section-title">最新价格行情（本地抓取）</div>
+                        <div class="section-title">最新价格行情（粮油）</div>
                         <div>${contentHtml}</div>
                     `;
                     sectionsContainer.appendChild(card);

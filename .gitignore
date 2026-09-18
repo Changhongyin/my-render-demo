@@ -1,0 +1,43 @@
+# macOS 与 Python 产生的垃圾文件
+.DS_Store
+__pycache__/
+*.pyc
+
+# 日志（定时任务产生的运行/错误日志）
+*.log
+logs/
+
+# 每日数据备份（不必进版本库，恢复方法见 README）
+backups/
+
+# ⚠️ 如果以后把数据库密码写成独立配置文件，务必加在这里，别提交
+db_config.json
+local_config.py
+.env
+
+# 云函数打包产物
+build/
+*.zip
+
+# Node.js 依赖（打包云函数时本地会生成，不必进版本库）
+node_modules/
+package-lock.json
+
+# 前端构建缓存与产物（本仓库只保留 public/ 里的最终静态成品；
+# 前端源码（yuntian-static）与 .next/out/dist 一律不进本仓库）
+.next/
+out/
+dist/
+node_get_data/
+
+# Python 虚拟环境与测试缓存
+.venv/
+venv/
+.pytest_cache/
+
+# 定时任务日志（生成物，可随时重建）
+spider.log
+spider_error.log
+
+# 从数据库/控制台导出的临时文件（要纳入版本控制就删掉这行）
+data.csv

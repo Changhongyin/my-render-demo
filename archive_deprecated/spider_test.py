@@ -9,7 +9,7 @@ import sys
 import tempfile
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, PROJECT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests
 import local_spider
 
@@ -89,6 +89,9 @@ def fresh():
     del attempts[:]
     del sleeps[:]
 
+
+# 记录真实文件进入测试前的指纹，最后用来验证"测试全程没有污染真实文件"
+REAL_MD5_AT_START = (md5(REAL_ROOT), md5(REAL_PUBLIC))
 
 # ---- 用例 1：每次请求都失败 → 3 次尝试、每次都有 1~3 秒随机延迟、退出码 1、不覆盖 ----
 fresh()
@@ -175,12 +178,10 @@ check("7 写入的数据仍包含原有字段",
       sorted(payload7.keys()))
 
 # ---- 用例 6：全程没有污染真实文件 ----
-with open(REAL_ROOT, encoding="utf-8") as f:
-    real_root = f.read()
-with open(REAL_PUBLIC, encoding="utf-8") as f:
-    real_public = f.read()
-check("6 真实 data.json 未被测试改动（仍是演示数据）", '"source": "演示数据"' in real_root)
-check("6 真实 public/data.json 未被测试改动", real_root == real_public)
+check("6 真实 data.json 未被测试改动（指纹一致）",
+      md5(REAL_ROOT) == REAL_MD5_AT_START[0], REAL_MD5_AT_START)
+check("6 真实 public/data.json 未被测试改动（指纹一致）",
+      md5(REAL_PUBLIC) == REAL_MD5_AT_START[1], REAL_MD5_AT_START)
 
 print("\n================ 结果 ================")
 failed = 0

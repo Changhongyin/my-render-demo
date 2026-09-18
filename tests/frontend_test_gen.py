@@ -184,6 +184,71 @@ check('I 四条数据仍然全部渲染',
 check('I 被跳过等级的条目仍带价格与日期',
       lh.indexOf('¥2.47') >= 0 && lh.indexOf('¥2.77') >= 0, lh);
 
+// ---- J：v2 真实结构（meta + crops）----
+var V2 = {
+    meta: {
+        location: '山东省寿光市三元朱村',
+        source: '演示数据 + 实时抓取（序列中含 4 个演示种子点）｜图表历史段含模拟补齐数据',
+        stat_time: '2026-09-18 07:00', fetched_at: '2026-09-18',
+        series_days: 2, series_target: 90, degraded: true,
+        synthetic_history: true, synthetic_prefix_len: 88
+    },
+    crops: [
+        { name: '富强粉', category: '粮油', grade: '标一', unit: '元/公斤', latest: 2.8, date: '2026-09-18' },
+        { name: '标准粉', category: '粮油', grade: '无', unit: '元/公斤', latest: 2.47, date: '2026-09-18' }
+    ]
+};
+await scenario(V2, false);
+var v2h = cardHtml();
+check('J v2 位置信息取自 meta.location',
+      els['location-info'].textContent.indexOf('三元朱村') >= 0, els['location-info'].textContent);
+check('J v2 价格用 crops[].latest', v2h.indexOf('¥2.8') >= 0, v2h);
+check('J v2 等级用 crops[].grade', v2h.indexOf('class="level">标一<') >= 0, v2h);
+check('J v2 等级「无」不渲染胶囊', v2h.indexOf('class="level">无<') < 0, v2h);
+check('J v2 统计时间取自 meta.stat_time',
+      els['stat-time'].textContent === '数据统计截止时间：2026-09-18 07:00', els['stat-time'].textContent);
+check('J v2 角标显示来源且用醒目样式',
+      els['source-badge'].style.display === 'block' && els['source-badge'].className.indexOf('badge-demo') >= 0,
+      els['source-badge'].className);
+check('J v2 显示历史累积进度',
+      els['accumulate-note'].textContent === '历史数据累积中：2 / 90 天', els['accumulate-note'].textContent);
+check('J v2 显示模拟补齐披露（诚实性底线）',
+      els['synthetic-note'].style.display === 'block' && els['synthetic-note'].textContent.indexOf('88') > 0,
+      els['synthetic-note'].textContent);
+check('J v2 页脚来源跟随 meta.source',
+      els['source-note'].textContent.indexOf('演示数据 + 实时抓取') >= 0, els['source-note'].textContent);
+
+// ---- K：v2 + 某品种本次没抓到（stale）----
+var V2_STALE = {
+    meta: {
+        location: '山东省寿光市三元朱村', source: '实时抓取（国家发展改革委价格监测中心）',
+        stat_time: '2026-09-18 07:00', series_days: 90, series_target: 90, degraded: false
+    },
+    crops: [
+        { name: '粳米', grade: '标一', latest: 2.95, date: '2026-09-18' },
+        { name: '晚籼米', grade: '标一', latest: 2.77, date: '2026-09-17', stale: true, last_updated: '2026-09-17' }
+    ]
+};
+await scenario(V2_STALE, false);
+check('K stale 品种带「本次未更新」标记', cardHtml().indexOf('本次未更新') >= 0, cardHtml());
+check('K stale 标记里带最后更新日期', cardHtml().indexOf('2026-09-17') >= 0, cardHtml());
+check('K 只标记 stale 的那一条',
+      (cardHtml().match(/本次未更新/g) || []).length === 1, cardHtml());
+check('K 攒够天数后不显示累积进度', els['accumulate-note'].style.display === 'none', els['accumulate-note'].style.display);
+check('K 无模拟数据时不显示披露', els['synthetic-note'].style.display === 'none', els['synthetic-note'].style.display);
+check('K 真实数据角标保持低调', els['source-badge'].className === 'badge', els['source-badge'].className);
+
+// ---- L：v2 但 crops 为空 ----
+await scenario({ meta: { location: '山东省寿光市三元朱村', source: '演示数据' }, crops: [] }, false);
+check('L crops 为空时提示空数据', els['error-msg'].textContent === 'data.json 内容为空。', els['error-msg'].textContent);
+check('L crops 为空时不渲染卡片', els['sections-container'].children.length === 0, els['sections-container'].children.length);
+
+// ---- M：只有 crops、没有 meta（容错）----
+await scenario({ crops: [{ name: '富强粉', grade: '标一', latest: 2.8, date: '2026-09-18' }] }, false);
+check('M meta 缺失时仍能渲染数据', cardHtml().indexOf('富强粉') >= 0, cardHtml());
+check('M meta 缺失时位置回退为全国', els['location-info'].textContent.indexOf('全国') >= 0, els['location-info'].textContent);
+check('M meta 缺失时不显示角标', els['source-badge'].style.display === 'none', els['source-badge'].style.display);
+
 print('');
 print('共 ' + (passCount + failCount) + ' 项，失败 ' + failCount + ' 项');
 if (failCount > 0) { throw new Error('有前端断言失败'); }
@@ -220,15 +285,24 @@ css_check("减少动效时骨架屏降级", "prefers-reduced-motion" in html)
 css_check("重试按钮触摸高度 >= 44px（实测 %s）" % px(".retry-btn", "min-height"), px(".retry-btn", "min-height") >= 44)
 css_check("统计时间样式 .stat-time 存在", ".stat-time" in html)
 
-NOTE_TEXT = "数据来源：演示数据，用于UI/UX原型展示。前端架构已就绪，可随时接入官方 API 或真实数据源。"
+NOTE_TEXT = "数据来源以实际抓取结果为准。前端架构已就绪，可随时接入官方 API 或真实数据源。"
 css_check("页脚说明样式 .data-source-note 存在", ".data-source-note" in html)
 css_check("页脚字号 <= 13px（实测 %s）" % px(".data-source-note"), 0 < px(".data-source-note") <= 13)
-css_check("页脚居中显示且用浅灰（实测 %s）" % css_block(".data-source-note")[:0] + "#9aa7b1",
+css_check("页脚居中显示且用浅灰",
           "text-align: center" in css_block(".data-source-note") and "#9aa7b1" in css_block(".data-source-note"))
-css_check("页脚文案与要求逐字一致", NOTE_TEXT in html)
-css_check("页脚是静态 HTML（位于重试按钮之后、script 之前）",
-          html.index('<p class="data-source-note"') > html.index('id="retry-btn"')
-          and html.index('<p class="data-source-note"') < html.index('<script>'))
+css_check("页脚有 id=source-note，供 JS 按 meta.source 动态填充", 'id="source-note"' in html)
+css_check("页脚兜底文案存在", NOTE_TEXT in html)
+css_check("页脚位于重试按钮之后、script 之前",
+          html.index('<p id="source-note"') > html.index('id="retry-btn"')
+          and html.index('<p id="source-note"') < html.index('<script>'))
+css_check("存在历史累积进度元素 #accumulate-note", 'id="accumulate-note"' in html)
+css_check("存在模拟数据披露元素 #synthetic-note", 'id="synthetic-note"' in html)
+css_check("模拟披露用醒目样式 .note.note-warn", ".note.note-warn" in html)
+css_check("存在「本次未更新」标记样式 .stale", ".stale {" in html)
+css_check("三种数据格式都能识别（crops / items / 数组）",
+          "Array.isArray(payload.crops)" in html and "Array.isArray(payload.items)" in html
+          and "Array.isArray(payload)" in html)
+
 
 
 def make():

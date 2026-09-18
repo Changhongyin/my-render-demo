@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS 定时任务：每天早晨 07:00 抓取一次行情数据。
+
+  安装：bash scripts/install_launchd.sh
+  卸载：bash scripts/uninstall_launchd.sh
+  立即试跑：launchctl kickstart -k gui/$(id -u)/com.yuntian.spider
+  看错误：cat spider_error.log
+
+  说明：下面的路径是本机绝对路径，换电脑需要同步修改（用 install_launchd.sh 会自动校验）。
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.yuntian.spider</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/user/Documents/my-render-demo/scripts/run_spider.sh</string>
+    </array>
+
+    <!-- 每天 07:00 执行。若那时电脑在睡眠，launchd 会在唤醒后补跑一次 -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/user/Documents/my-render-demo</string>
+
+    <!-- 脚本内部已单独写 spider.log / spider_error.log，这里只兜住 launchd 层的异常输出 -->
+    <key>StandardOutPath</key>
+    <string>/Users/user/Documents/my-render-demo/logs/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/user/Documents/my-render-demo/logs/launchd.err.log</string>
+
+    <!-- 加载时不要立刻跑（避免安装当天就抓一次） -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>LANG</key>
+        <string>zh_CN.UTF-8</string>
+        <key>PYTHONIOENCODING</key>
+        <string>utf-8</string>
+    </dict>
+</dict>
+</plist>

@@ -1,0 +1,16 @@
+{
+  "name": "node_get_data",
+  "version": "1.0.0",
+  "private": true,
+  "description": "腾讯云云函数：读取 CloudBase PostgreSQL 的 crop_price_data（表）并以 JSON 返回",
+  "main": "index.js",
+  "engines": {
+    "node": ">=12"
+  },
+  "dependencies": {
+    "pg": "^8.11.3"
+  },
+  "scripts": {
+    "check": "node -e \"require('./index.js'); console.log('index.js 语法与依赖加载均正常（pg 已就绪）')\""
+  }
+}
