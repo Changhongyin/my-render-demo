@@ -19,6 +19,8 @@ public/data.json          ★ 与上一份内容完全一致，供静态托管�
 public/farm.html          ★ 展示页（客户端 fetch /data.json）    ← 要上传的就是它
 public/index.html           早期"调云函数"版页面（后端已归档，不建议上传）
 local_spider_v2.py        ★ 本地数据生成脚本（抓取 + 历史累积 + 模拟补齐 + 自动备份，不连数据库）
+fetch_weather_alerts.py   ★ 气象预警接入脚本（多来源可插拔 + --mock 联调；失败不写文件，详见 docs/气象预警接入说明.md）
+.env.example               气象预警 API 的配置模板（cp .env.example .env 后填写；.env 已被 git 忽略）
 backups/                    每次写入前的自动备份（只保留最近 7 份）
 scripts/                    定时任务 + 一键测试
   ├── run_spider.sh             定时任务执行入口（写 spider.log / spider_error.log）
@@ -338,3 +340,35 @@ python3 archive_deprecated/cloud-fn-node/node_function_test.py
 
 **如果将来要恢复云方案**：把文件从 `archive_deprecated/` 拷回原位（`db-python/db_connector.py` → 项目根；`cloud-fn-node/*` → `node_get_data/`），
 再把 `local_spider_v2.py` 里已删除的写库逻辑补回来（可从 git 历史找回）。
+
+---
+
+## 十四、气象预警接入（`fetch_weather_alerts.py`）
+
+行情由 `local_spider_v2.py` 负责，**气象预警由本脚本独立负责**，两者互不覆盖对方的字段。
+
+```
+抓预警（可插拔 provider）→ 归一化 → 合并进 data.json
+   ├─ 顶层 weather.active_alerts     结构化（类型/等级/颜色/正文/防御建议/有效期）
+   ├─ crops[].alerts.risk[]          字符串数组，farm.html / Next 前端现在就能渲染
+   └─ meta.weather_* / notes / sources  来源、抓取时间、是否 mock，全部如实标注
+```
+
+```bash
+# 还没注册接口时：用内置模拟预警把前端渲染跑通（不联网；默认不覆盖线上文件）
+python3 fetch_weather_alerts.py --mock --dry-run     # 只看
+python3 fetch_weather_alerts.py --mock               # 写 public/data.mock.json
+python3 fetch_weather_alerts.py --mock --write       # 覆盖线上 data.json（先自动备份）
+
+# 注册好接口之后（配置见 .env.example，密钥只放 .env，绝不进代码）
+cp .env.example .env && vi .env
+python3 fetch_weather_alerts.py --dry-run            # 干跑
+python3 fetch_weather_alerts.py                      # 正式写入 data.json + public/data.json
+
+# 自测（离线，95 项，含"失败不写文件""mock 不冒充真实预警"）
+python3 tests/weather_alert_test.py
+```
+
+- 坐标默认 `118.73,36.88`（寿光三元朱村），可用 `--lat/--lon` 或 `.env` 覆盖
+- 抓取失败 → **退出码 1，现有 data.json 一个字节都不动**
+- 详细注册清单、`.env` 填法、字段映射、上线检查清单：见 [`docs/气象预警接入说明.md`](docs/气象预警接入说明.md)

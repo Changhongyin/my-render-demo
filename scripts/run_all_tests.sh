@@ -47,6 +47,11 @@ else
   printf '  ✅ 渲染正常\n'
 fi
 
+# python3 tests/weather_alert_test.py
+
+# 气象预警接入脚本（离线，含 mock 模式与"失败不写文件"验证）
+run "fetch_weather_alerts.py 自测" python3 tests/weather_alert_test.py
+
 # 归档代码的测试：默认【不跑】——它们测的是已废弃的数据库/云函数方案。
 # 需要时手动执行（路径在 archive_deprecated/ 里）：
 #   python3 archive_deprecated/spider_test.py

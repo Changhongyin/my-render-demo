@@ -30,6 +30,13 @@ out/
 dist/
 node_get_data/
 
+# 密钥 / 本地配置（气象预警 API 的 ID、KEY 等，绝不进版本库）
+.env
+.env.local
+
+# 预警脚本生成的预览文件（联调用，随时可重建）
+public/data.mock.json
+
 # Python 虚拟环境与测试缓存
 .venv/
 venv/

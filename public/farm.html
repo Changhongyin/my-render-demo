@@ -73,6 +73,34 @@
         .sk-row.short { width: 72%; }
         @keyframes sk-shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
         @media (prefers-reduced-motion: reduce) { .sk-line { animation: none; } }
+
+        /* ===== 气象预警卡片 =====
+           和绿色行情卡片明显区分：同色系浅底 + 左侧 8px 粗色条 + 同色等级胶囊，
+           颜色按预警等级走（红 > 橙 > 黄 > 蓝），让人一眼看到风险。 */
+        .alert-card { margin-top: 16px; padding: 14px 14px 12px 16px; border: 1px solid #ffcc80; border-left: 8px solid #ff8c00; border-radius: 14px; background: #ffe8cc; box-shadow: 0 1px 2px rgba(120, 60, 0, .08); }
+        .alert-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+        .alert-icon { font-size: 22px; line-height: 1; }
+        .alert-title { font-size: 18px; font-weight: 800; color: #7a3d00; }
+        .alert-level { padding: 2px 10px; font-size: 13px; font-weight: 700; color: #fff; background: #ff8c00; border-radius: 999px; }
+        /* 「模拟数据」标记：联调时一眼能看出不是真实预警 */
+        .alert-mock { padding: 1px 8px; font-size: 12px; font-weight: 700; color: #8a6d3b; background: #fff3cd; border: 1px solid #ffe08a; border-radius: 999px; }
+        .alert-body { margin-top: 8px; font-size: 15.5px; line-height: 1.7; color: #4a3520; }
+        .alert-advice { margin-top: 10px; padding: 10px 12px; font-size: 15.5px; line-height: 1.65; color: #274b36; background: rgba(255, 255, 255, .78); border-radius: 10px; }
+        .alert-advice .k { font-weight: 800; color: var(--brand-dark); }
+        .alert-meta { margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(0, 0, 0, .14); font-size: 12.5px; line-height: 1.6; color: #7a6248; }
+        .alert-item + .alert-item { margin-top: 12px; padding-top: 12px; border-top: 1px dashed rgba(0, 0, 0, .14); }
+        /* 等级配色：红色 */
+        .alert-card.lv-red { background: #ffe0e0; border-color: #ffb3b3; border-left-color: #e60012; }
+        .alert-card.lv-red .alert-level { background: #e60012; }
+        .alert-card.lv-red .alert-title { color: #8c1010; }
+        /* 等级配色：黄色 */
+        .alert-card.lv-yellow { background: #fff8d6; border-color: #ffe58a; border-left-color: #e6b800; }
+        .alert-card.lv-yellow .alert-level { background: #e6b800; }
+        .alert-card.lv-yellow .alert-title { color: #6b5300; }
+        /* 等级配色：蓝色（白色等级也归到这一档） */
+        .alert-card.lv-blue { background: #e3f2fd; border-color: #a6d4f5; border-left-color: #1e90ff; }
+        .alert-card.lv-blue .alert-level { background: #1e90ff; }
+        .alert-card.lv-blue .alert-title { color: #10456e; }
     </style>
 </head>
 <body>
@@ -238,6 +266,168 @@
                 .replace(/'/g, '&#39;');
         }
 
+        /* ==================== 三、气象预警渲染 ====================
+           预警数据在 data.json 的【顶层 weather.active_alerts】里（由 fetch_weather_alerts.py 写入）：
+             payload.weather = { location, lat, lon, provider, data_kind, fetched_at,
+                                 alert_count, source, mirrored_to,
+                                 active_alerts: [ { type, level, title, text, advice,
+                                                    sender, pub_time, expire, src, data_kind } ] }
+           兜底：万一没有 weather 块，就从 crops[].alerts.* 的字符串数组里取（去重后当正文）。
+           容错：任何字段缺失只是少渲染一块；一条预警都没有就不渲染卡片，也不会报错。 */
+
+        var ALERT_LEVELS = [
+            { key: '红色', cls: 'lv-red',    icon: '🟥', order: 4 },
+            { key: '橙色', cls: 'lv-orange', icon: '🟧', order: 3 },
+            { key: '黄色', cls: 'lv-yellow', icon: '🟨', order: 2 },
+            { key: '蓝色', cls: 'lv-blue',   icon: '🟦', order: 1 },
+            { key: '白色', cls: 'lv-blue',   icon: '⬜', order: 0 }
+        ];
+
+        // 等级 → 配色/图标/优先级；认不出来的返回 null，由调用方兜底
+        function levelInfo(level) {
+            var text = String(level === null || level === undefined ? '' : level);
+            for (var i = 0; i < ALERT_LEVELS.length; i++) {
+                if (text.indexOf(ALERT_LEVELS[i].key) !== -1) return ALERT_LEVELS[i];
+            }
+            return null;
+        }
+
+        // 数据源地址：默认 /data.json；网址后加 ?data=data.mock.json 可临时指向别的文件（联调 mock 用）
+        // 用 typeof 保护：jsc 测试环境里没有 location，这里绝不能抛错
+        function resolveDataUrl() {
+            try {
+                if (typeof location !== 'undefined' && location && location.search) {
+                    var m = /[?&]data=([^&]+)/.exec(location.search);
+                    if (m && m[1]) return decodeURIComponent(m[1]);
+                }
+            } catch (e) { /* 拿不到就用默认值 */ }
+            return '/data.json';
+        }
+
+        // 取预警：优先结构化 weather.active_alerts，其次 crops[].alerts 里的字符串
+        function pickAlerts(payload) {
+            if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+
+            var weather = payload.weather;
+            if (weather && Array.isArray(weather.active_alerts) && weather.active_alerts.length > 0) {
+                return {
+                    alerts: weather.active_alerts,
+                    kind: weather.data_kind,
+                    source: weather.source,
+                    fetchedAt: weather.fetched_at
+                };
+            }
+
+            var meta = payload.meta || {};
+            var crops = Array.isArray(payload.crops) ? payload.crops : [];
+            var texts = [];
+            crops.forEach(function (crop) {
+                var block = crop && crop.alerts;
+                if (!block) return;
+                ['price', 'supply', 'risk'].forEach(function (key) {
+                    if (!Array.isArray(block[key])) return;
+                    block[key].forEach(function (t) {
+                        var s = String(t === null || t === undefined ? '' : t).trim();
+                        if (s && texts.indexOf(s) === -1) texts.push(s);
+                    });
+                });
+            });
+            if (texts.length === 0) return null;
+
+            return {
+                alerts: texts.map(function (t) { return { text: t }; }),
+                kind: meta.weather_data_kind,
+                source: meta.weather_source,
+                fetchedAt: meta.weather_fetched_at
+            };
+        }
+
+        // 解析一条预警的等级：优先用字段 level，其次从标题/正文里认（兜底字符串没有 level 字段）
+        function resolveLevel(alert) {
+            var a = alert || {};
+            var info = levelInfo(a.level);
+            if (info) return { level: info.key, info: info };
+            var probe = levelInfo(String(a.title || '') + String(a.text || ''));
+            if (probe) return { level: probe.key, info: probe };
+            return { level: String(a.level === null || a.level === undefined ? '' : a.level).trim(), info: null };
+        }
+
+        // 单条预警 → HTML。所有来自数据的字段一律先 escapeHtml 再拼接（防 XSS）
+        function alertItemHtml(alert) {
+            var a = alert || {};
+            var type = String(a.type || '').trim();
+            var rl = resolveLevel(a);
+            var level = rl.level;
+            var info = rl.info;
+            var title = (type || level)
+                ? (type + level + '预警')
+                : (String(a.title || '').trim() || '气象预警');
+
+            var html = '<div class="alert-item">';
+            html += '<div class="alert-head">';
+            html += '<span class="alert-icon">' + escapeHtml(info ? info.icon : '⚠️') + '</span>';
+            html += '<span class="alert-title">' + escapeHtml(title) + '</span>';
+            if (level) html += '<span class="alert-level">' + escapeHtml(level) + '</span>';
+            if (String(a.data_kind || '').toLowerCase() === 'mock') {
+                html += '<span class="alert-mock">模拟数据</span>';
+            }
+            html += '</div>';
+
+            // 正文：优先气象局原文（text），没有就用标题
+            var body = String(a.text || '').trim() || String(a.title || '').trim();
+            if (body) html += '<div class="alert-body">' + escapeHtml(body) + '</div>';
+
+            // 建议：AI 生成的「该干啥」
+            if (a.advice) {
+                html += '<div class="alert-advice"><span class="k">该干啥：</span>'
+                     + escapeHtml(a.advice) + '</div>';
+            }
+
+            // 来源：发布单位 + 时间（合规标注，必须显示）
+            var bits = [];
+            if (a.sender) bits.push('发布单位：' + escapeHtml(a.sender));
+            if (a.pub_time) bits.push('发布时间：' + escapeHtml(a.pub_time));
+            if (a.expire) bits.push('有效期至：' + escapeHtml(a.expire));
+            if (a.src) bits.push('来源：' + escapeHtml(a.src));
+            if (bits.length > 0) html += '<div class="alert-meta">' + bits.join(' ｜ ') + '</div>';
+
+            html += '</div>';
+            return html;
+        }
+
+        // 渲染整张预警卡片（排在行情卡片之后）。没有预警 → 返回 false，不渲染也不报错
+        function renderAlertCard(payload) {
+            var picked = pickAlerts(payload);
+            if (!picked || picked.alerts.length === 0) return false;
+
+            // 等级高的排前面；卡片整体用最高等级的配色
+            var alerts = picked.alerts.slice().sort(function (x, y) {
+                var ix = resolveLevel(x).info;
+                var iy = resolveLevel(y).info;
+                return (iy ? iy.order : -1) - (ix ? ix.order : -1);
+            });
+            var top = resolveLevel(alerts[0]).info;
+            var cardCls = 'alert-card ' + (top ? top.cls : 'lv-orange');
+
+            var inner = '';
+            alerts.forEach(function (alert) { inner += alertItemHtml(alert); });
+
+            var headTag = '';
+            if (String(picked.kind || '').toLowerCase() === 'mock') headTag = '⚠️ 模拟数据，仅供联调';
+            else if (picked.fetchedAt) headTag = '更新于 ' + picked.fetchedAt;
+
+            var card = document.createElement('div');
+            card.className = cardCls;
+            card.innerHTML =
+                '<div class="alert-head">' +
+                    '<span class="alert-icon">🌦️</span>' +
+                    '<span class="alert-title">气象预警（' + escapeHtml(alerts.length) + ' 条）</span>' +
+                    (headTag ? '<span class="alert-mock">' + escapeHtml(headTag) + '</span>' : '') +
+                '</div>' + inner;
+            sectionsContainer.appendChild(card);
+            return true;
+        }
+
         async function loadData() {
             loadingEl.style.display = 'block';
             sectionsContainer.innerHTML = '';
@@ -255,9 +445,10 @@
             skeletonEl.style.display = 'block';   // 先把骨架屏亮出来，避免页面空白
 
             try {
-                // 直接请求静态托管根目录下的 data.json
+                // 默认请求静态托管根目录下的 data.json
                 // ?t=Date.now() 强行绕过 CDN/浏览器缓存，保证看到最新抓取结果
-                const response = await fetch('/data.json?t=' + Date.now());
+                // 联调 mock 数据：在网址后加 ?data=data.mock.json 即可，不必覆盖线上文件
+                const response = await fetch(resolveDataUrl() + '?t=' + Date.now());
                 if (!response.ok) throw new Error('无法获取 data.json，请检查是否上传。');
 
                 const payload = await response.json();
@@ -313,6 +504,9 @@
                 } else {
                     errorEl.textContent = 'data.json 内容为空。';
                 }
+
+                // 气象预警卡片：有预警才渲染；没有预警字段 / 数组为空 → 静默跳过，不影响行情卡片
+                renderAlertCard(payload);
 
             } catch (err) {
                 loadingEl.style.display = 'none';
