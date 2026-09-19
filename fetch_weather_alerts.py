@@ -17,12 +17,16 @@
   3. 如实标注：来源、抓取时间、是否 mock 全部写进 meta，前端必须能看到。
   4. mock 数据默认【不覆盖】线上 data.json：写到 public/data.mock.json 供联调，
      必须显式加 --write 才允许替换线上文件，免得演示数据被当成真实预警发出去。
+  5. "接口通了但没有预警"（返回空数组）算【成功】，会如实写 alert_count=0 并摘掉旧字符串；
+     但"响应里根本没有预警容器"（如彩云 token 没有预警权限）算【失败】，明确报错、不写文件——
+     不能把"没拿到数据"伪装成"当前没有预警"。
 
 用法：
     python3 fetch_weather_alerts.py --mock                 # 模拟预警 → public/data.mock.json（不碰线上）
     python3 fetch_weather_alerts.py --mock --dry-run        # 只打印，什么都不写
     python3 fetch_weather_alerts.py --mock --write          # 模拟预警覆盖 data.json（会先自动备份）
     python3 fetch_weather_alerts.py                         # 真实抓取（需先按 .env.example 配好 .env）
+    python3 fetch_weather_alerts.py --dry-run               # 真实抓取，只打印不写文件（联调第一步）
     python3 fetch_weather_alerts.py --provider apihz --lat 36.88 --lon 118.73
     python3 fetch_weather_alerts.py --mock --out /tmp/x.json   # 只写指定文件（调试用）
 """
@@ -74,6 +78,11 @@ LEVEL_COLORS = {
     "黄色": "#FFD700",
     "蓝色": "#1E90FF",
     "白色": "#FFFFFF",
+}
+
+# 有的平台（如彩云 v3 预警）用英文色名描述等级：统一折算成中文颜色词
+LEVEL_ALIASES_EN = {
+    "red": "红色", "orange": "橙色", "yellow": "黄色", "blue": "蓝色", "white": "白色",
 }
 
 # 归一化后的预警字段（所有 provider 都必须产出这套字段）
@@ -210,6 +219,27 @@ def parse_time(value):
     return None
 
 
+def humanize_time(value):
+    """把各家五花八门的时间统一成「YYYY-MM-DD HH:MM:SS」。
+
+    · 秒级时间戳（彩云 v2.6 的 pubtimestamp=1640733900）→ 本地时间字符串
+    · 毫秒级时间戳（13 位）→ 先 /1000 再换算
+    · 字符串时间 → 能解析就规范化，解析不出来原样返回（绝不丢信息、绝不抛异常）
+    """
+    if value is None or value == "":
+        return ""
+    if isinstance(value, str) and re.match(r"^\d{9,14}$", value.strip()):
+        value = int(value.strip())          # 字符串形式的纯数字时间戳
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        ts = float(value)
+        if ts > 1e11:                       # 13 位毫秒 → 秒
+            ts /= 1000.0
+        dt = parse_time(ts)
+        return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else str(value)
+    dt = parse_time(value)
+    return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else str(value).strip()
+
+
 def is_expired(alert, now=None):
     """已过期的预警不再对外展示（--include-expired 可保留，仅调试用）。"""
     expire = parse_time(alert.get("expire"))
@@ -325,6 +355,10 @@ def normalize_alert(raw, provider, field_map=None, source_label=None, data_kind=
         if known in level:
             level = known
             break
+    else:                               # 一个中文颜色词都没认出来 → 试试英文色名（彩云 v3 用 red/orange/…）
+        m_en = re.match(r"^\s*(red|orange|yellow|blue|white)\b", level, re.I)
+        if m_en:
+            level = LEVEL_ALIASES_EN[m_en.group(1).lower()]
 
     raw_color = str(get("color", ["color", "severityColor", "levelColor"])).strip()
     if re.match(r"^#?[0-9a-fA-F]{3,8}$", raw_color):
@@ -345,9 +379,13 @@ def normalize_alert(raw, provider, field_map=None, source_label=None, data_kind=
         "level": level,
         "color": color,
         "sender": str(get("sender", ["sender", "senderName", "publisher", "org", "office", "source"])).strip(),
-        "pub_time": str(get("pub_time", ["pubTime", "pub_time", "pubtime", "publishTime", "fabutime", "issueTime", "time"])).strip(),
-        "effective": str(get("effective", ["effectiveTime", "effective", "startTime", "start_time", "onset"])).strip(),
-        "expire": str(get("expire", ["expireTime", "expire", "endTime", "end_time", "expires"])).strip(),
+        "pub_time": humanize_time(get("pub_time", ["pubTime", "pub_time", "pubtime", "pubtimestamp",
+                                                   "pubTimestamp", "publishTime", "publish_time",
+                                                   "fabutime", "issueTime", "time"])),
+        "effective": humanize_time(get("effective", ["effectiveTime", "effective", "startTime",
+                                                     "start_time", "starttime", "onset"])),
+        "expire": humanize_time(get("expire", ["expireTime", "expire", "endTime", "end_time",
+                                               "endtime", "expires"])),
         "text": str(get("text", ["text", "content", "description", "detail", "msg", "body", "message"])).strip(),
         "advice": str(get("advice", ["advice", "defense", "instruction", "guide", "suggestion", "tips"])).strip(),
         "src": str(source_label or get("src", ["source", "sender", "publisher"])).strip(),
@@ -362,6 +400,15 @@ def normalize_alert(raw, provider, field_map=None, source_label=None, data_kind=
             if known in alert["title"]:
                 alert["type"] = known
                 break
+    # 等级缺失时，从标题/正文里认颜色词（彩云 v2.6 的预警记录只有 title，没有 level 字段）
+    if not alert["level"]:
+        probe = alert["title"] or alert["text"]
+        for known in SEVERITY_ORDER:
+            if known in probe:
+                alert["level"] = known
+                break
+        if alert["level"] and not alert["color"]:
+            alert["color"] = LEVEL_COLORS.get(alert["level"], "")
     if not alert["src"]:
         alert["src"] = provider
     if not alert["id"]:
@@ -515,8 +562,50 @@ def http_json(url, method="GET", params=None, headers=None, body=None,
     raise RuntimeError("请求失败（已重试 %d 次）：%s" % (retries, last_err))
 
 
+def means_no_alerts(payload, list_path):
+    """判断这是不是"接口通了、只是当前没有预警"（而不是"结构不对 / 没权限"）。
+
+    命中两种情况：
+      1) 预警容器本身就在响应里，只是空的：{"result": {"alert": {"status": "ok", "content": []}}}
+      2) 顶层明确写着成功，且确实带了空数组字段：{"status": "ok", "warning": []}
+    """
+    if isinstance(payload, dict) and list_path and dig(payload, list_path) is not None:
+        return True
+    if not isinstance(payload, dict):
+        return False
+    ok = (str(payload.get("status", "")).strip().lower() in ("ok", "success", "true")
+          or payload.get("code") in (200, "200", 0, "0")
+          or payload.get("success") is True)
+    if not ok:
+        return False
+    return any(isinstance(payload.get(key), list) for key in LIST_KEYS)
+
+
+def no_alerts_hint(provider, payload, list_path):
+    """响应里找不到预警容器时，给出"到底为什么"的可执行提示（绝不静默当成"没有预警"）。"""
+    if provider == "caiyun":
+        return (
+            "彩云接口是通的（status=%s，api_status=%s），但响应里没有 result.alert ——\n"
+            "   彩云「预警数据」属于【增值服务】，不在免费赠送额度内：只有 token 具备预警权限时，\n"
+            "   带 alert=true 的请求才会附带 result.alert（官方文档：v2.6 API → 预警数据 → 访问限制；\n"
+            "   v3 单点查询更是「仅提供给企业套餐开发者」）。\n"
+            "   → 开通：https://dashboard.caiyunapp.com 找到本应用的 token，为其开通/升级预警数据后重试；\n"
+            "   → 或改用免费来源：ALERT_PROVIDER=apihz / generic（见 .env.example）；\n"
+            "   → 或先用 --mock 把前端渲染跑通。"
+            % (payload.get("status"), payload.get("api_status"))
+        )
+    return ("接口没返回预警数组（list_path=%s）。响应结构可能和你配的 ALERT_JSON_PATH 不一致，"
+            "或该来源当前不提供预警数据；可用 --out /tmp/x.json 把原始响应抓下来看一眼。" % list_path)
+
+
 def fetch_alerts(cfg):
-    """按 provider 抓取预警并归一化；返回 list[alert]。失败一律抛异常（由上层决定不写文件）。"""
+    """按 provider 抓取预警并归一化；返回 list[alert]。失败一律抛异常（由上层决定不写文件）。
+
+    注意区分三种"看起来都像没数据"的情况：
+      · 预警容器存在但为空 → 正常返回 []（接口通、当前无预警，算成功）
+      · 容器根本不存在（如彩云 token 没有预警权限）→ 抛异常，提示去开通
+      · 平台整体报错（如限流 status=failed）→ 抛异常，原样带出平台的错误信息
+    """
     provider = cfg["provider"]
     if provider == "mock":
         return build_mock_alerts()
@@ -566,14 +655,19 @@ def fetch_alerts(cfg):
     payload = http_json(url, method=cfg["api_method"], params=params, headers=headers, body=body,
                         timeout=cfg["timeout"], retries=cfg["retries"], no_delay=cfg["no_delay"])
 
-    if isinstance(payload, dict) and payload.get("code") not in (None, 200, "200", 0):
-        raise RuntimeError("接口返回异常：code=%s msg=%s" % (payload.get("code"), payload.get("msg")))
+    # 平台整体性报错：HTTP 200 但 body 里写着 failed（典型：彩云 "Rate limit exceeded" 限流）
+    if isinstance(payload, dict):
+        failed = str(payload.get("status", "")).strip().lower() in ("failed", "fail", "error")
+        bad_code = payload.get("code") not in (None, 200, "200", 0, "0")
+        if failed or bad_code:
+            raise RuntimeError("接口返回异常：status=%s code=%s msg=%s"
+                               % (payload.get("status"), payload.get("code"),
+                                  payload.get("error") or payload.get("errmsg")
+                                  or payload.get("msg") or "（平台未给说明）"))
 
     items = first_list(payload, list_path)
-    if not items:
-        raise RuntimeError(
-            "接口没返回预警数组（list_path=%s）。可用 ALERT_JSON_PATH 指定正确路径。" % list_path
-        )
+    if not items and not means_no_alerts(payload, list_path):
+        raise RuntimeError(no_alerts_hint(provider, payload, list_path))
     return [normalize_alert(it, provider, field_map=field_map, source_label=source_label) for it in items]
 
 
@@ -604,6 +698,10 @@ def merge_into_data(data, alerts, cfg, include_expired=False):
     kinds = set([a.get("data_kind") for a in alerts]) or set(["live"])
     data_kind = "mock" if "mock" in kinds else "live"
     src_label = " + ".join(sorted(set([str(a.get("src", "")).strip() for a in alerts if a.get("src")])))
+    if not src_label:        # 一条预警都没有时也要写清"问的是哪个来源"，别让前端只看到 provider 代号
+        src_label = (cfg.get("source_label")
+                     or (PROVIDER_PRESETS.get(cfg["provider"]) or {}).get("source")
+                     or cfg["provider"])
     bucket = cfg["bucket"]
 
     # 1) 顶层结构化预警（供以后的预警卡片 / 详情页 / 知识库引用）

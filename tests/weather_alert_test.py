@@ -12,6 +12,7 @@ fetch_weather_alerts.py 自测（全部离线，不联网、不碰线上 data.js
     5. 合并进 data.json：weather / meta / crops[].alerts 三处都写对，且不动行情字段
     6. 幂等（连续合并两次不会重复累积）、空预警时的处理
     7. 失败不写文件（缺凭证时秒退、不联网、data.json 一个字节都不动）
+    8. 彩云预警（v2.6 alert）字段解析、"空数组也算成功"、无预警权限的诊断、限流识别
 """
 
 import argparse
@@ -248,8 +249,89 @@ def main():
     check("时间：中文格式", fwa.parse_time("2026年09月19日 08:00") == datetime(2026, 9, 19, 8, 0))
     check("时间：乱填返回 None（不崩）", fwa.parse_time("昨天") is None)
 
-    # ---------- 8. 命令行端到端（复制到临时目录跑，绝不碰真实 data.json） ----------
-    print("\n【8】命令行端到端（沙箱目录，不联网）")
+    # ---------- 8. 彩云预警解析 / "空数组也是成功" / 权限缺失诊断 ----------
+    print("\n【8】彩云预警（v2.6 alert）解析与空结果语义")
+
+    # 官方文档 v2.6「预警数据」给出的预警记录原文（字段名照抄：pubtimestamp / description / alertId / title …）
+    caiyun_raw = {
+        "province": "北京市", "status": "预警中", "code": "0501",
+        "description": "海淀区气象台29日07时25分发布大风蓝色预警,预计当前至29日16时，"
+                       "海淀区将有3、4级偏北风，阵风6、7级，请注意防范。",
+        "regionId": "101010200", "county": "无", "pubtimestamp": 1640733900,
+        "latlon": [39.959912, 116.298056], "city": "海淀区",
+        "alertId": "11010841600000_20211229072633",
+        "title": "海淀区气象台发布大风蓝色预警[IV/一般]",
+        "adcode": "110108", "source": "国家预警信息发布中心",
+        "location": "北京市海淀区", "request_status": "ok",
+    }
+    cy = fwa.normalize_alert(caiyun_raw, "caiyun", source_label="彩云天气 Caiyun")
+    check("alertId → id", cy["id"] == "11010841600000_20211229072633", cy["id"])
+    check("description → text", cy["text"].startswith("海淀区气象台29日07时25分发布大风蓝色预警"), cy["text"][:24])
+    check("标题里认得出类型=大风", cy["type"] == "大风", cy["type"])
+    check("标题里的「蓝色」被认成 level（v2.6 记录没有 level 字段）", cy["level"] == "蓝色", cy["level"])
+    check("颜色按等级补齐", cy["color"] == fwa.LEVEL_COLORS["蓝色"], cy["color"])
+    check("pubtimestamp 秒级时间戳 → 可读时间",
+          cy["pub_time"] == datetime.fromtimestamp(1640733900).strftime("%Y-%m-%d %H:%M:%S"), cy["pub_time"])
+    check("source → sender（发布机构）", cy["sender"] == "国家预警信息发布中心", cy["sender"])
+    check("v2.6 没有有效期字段 → expire 为空且不会被误判过期",
+          cy["expire"] == "" and len(fwa.dedupe_and_sort([cy])) == 1)
+    cy_text = fwa.alert_to_text(cy)
+    check("前端文案头是【大风蓝色预警】", cy_text.startswith("【大风蓝色预警】"), cy_text[:16])
+    check("真实预警文案里不会出现「模拟数据」", "模拟数据" not in cy_text)
+    check("英文色名也认（彩云 v3 的 level=yellow）",
+          fwa.normalize_alert({"level": "yellow", "title": "雷电黄色预警"}, "caiyun")["level"] == "黄色")
+    check("毫秒时间戳照样能读", fwa.humanize_time(1640733900000) == cy["pub_time"], fwa.humanize_time(1640733900000))
+
+    # 用假的 http_json 把 fetch_alerts 的几条分支全跑一遍（仍然不联网）
+    real_http = fwa.http_json
+    try:
+        fwa.http_json = lambda *a, **k: {"status": "ok", "api_version": "v2.6", "api_status": "active",
+                                         "result": {"alert": {"status": "ok", "content": []}, "primary": 0}}
+        check("彩云返回空数组 → 抓取成功且 0 条（不再误报失败）",
+              fwa.fetch_alerts(cfg_for(provider="caiyun", caiyun_token="T")) == [])
+
+        fwa.http_json = lambda *a, **k: {"status": "ok", "api_version": "v2.6", "api_status": "active",
+                                         "result": {"alert": {"status": "ok", "content": [caiyun_raw]},
+                                                    "primary": 0}}
+        got = fwa.fetch_alerts(cfg_for(provider="caiyun", caiyun_token="T"))
+        check("拿到 1 条彩云预警并归一化", len(got) == 1 and got[0]["provider"] == "caiyun")
+        check("来源标注用预设 label（不是裸 provider 名）", got[0]["src"] == "彩云天气 Caiyun", got[0]["src"])
+        check("真实抓取的 data_kind=live", got[0]["data_kind"] == "live")
+
+        fwa.http_json = lambda *a, **k: {"status": "ok", "api_version": "v2.6", "api_status": "active",
+                                         "result": {"realtime": {"status": "ok"}, "primary": 0}}
+        try:
+            fwa.fetch_alerts(cfg_for(provider="caiyun", caiyun_token="T"))
+            check("彩云没有 result.alert（token 无预警权限）时明确报错", False, "居然没报错")
+        except RuntimeError as e:
+            check("彩云没有 result.alert（token 无预警权限）时明确报错",
+                  "预警权限" in str(e) and "增值服务" in str(e), str(e).splitlines()[0])
+
+        fwa.http_json = lambda *a, **k: {"status": "failed", "error": "Rate limit exceeded", "api_version": "2.6"}
+        try:
+            fwa.fetch_alerts(cfg_for(provider="caiyun", caiyun_token="T"))
+            check("限流响应被判为失败（不会静默当成没预警）", False, "居然没报错")
+        except RuntimeError as e:
+            check("限流响应被判为失败（不会静默当成没预警）", "Rate limit exceeded" in str(e), str(e))
+
+        fwa.http_json = lambda *a, **k: {"status": "ok", "warning": []}
+        check('generic：「{"status":"ok","warning":[]}」也算成功（0 条）',
+              fwa.fetch_alerts(cfg_for(provider="generic", api_url="https://example.com/x",
+                                       json_path="warning")) == [])
+    finally:
+        fwa.http_json = real_http
+
+    empty_live = fwa.merge_into_data(fake_data(), [], cfg_for(provider="caiyun"))
+    check("空预警合并后 data_kind=live、alert_count=0",
+          empty_live["meta"]["weather_data_kind"] == "live" and empty_live["weather"]["alert_count"] == 0)
+    check("空预警也写清来源（彩云天气 Caiyun）",
+          empty_live["meta"]["weather_source"] == "彩云天气 Caiyun", empty_live["meta"]["weather_source"])
+    check("空预警时 .env 里的 ALERT_SOURCE_LABEL 优先级最高",
+          fwa.merge_into_data(fake_data(), [], cfg_for(provider="caiyun", source_label="某省气象局"))[
+              "meta"]["weather_source"] == "某省气象局")
+
+    # ---------- 9. 命令行端到端（复制到临时目录跑，绝不碰真实 data.json） ----------
+    print("\n【9】命令行端到端（沙箱目录，不联网）")
     sandbox = tempfile.mkdtemp(prefix="wsandbox_")
     shutil.copy(os.path.join(BASE_DIR, "fetch_weather_alerts.py"),
                 os.path.join(sandbox, "fetch_weather_alerts.py"))

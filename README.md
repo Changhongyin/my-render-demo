@@ -365,10 +365,14 @@ cp .env.example .env && vi .env
 python3 fetch_weather_alerts.py --dry-run            # 干跑
 python3 fetch_weather_alerts.py                      # 正式写入 data.json + public/data.json
 
-# 自测（离线，95 项，含"失败不写文件""mock 不冒充真实预警"）
+# 自测（离线，116 项，含"失败不写文件""mock 不冒充真实预警""空数组也算成功"）
 python3 tests/weather_alert_test.py
 ```
 
 - 坐标默认 `118.73,36.88`（寿光三元朱村），可用 `--lat/--lon` 或 `.env` 覆盖
 - 抓取失败 → **退出码 1，现有 data.json 一个字节都不动**
+- **"接口通、当前没有预警"（返回空数组）算成功**：写 `alert_count=0` 并摘掉旧的预警字符串；
+  但**响应里根本没有预警容器**（拿不到数据）算失败，报错退出——不把"没拿到"伪装成"没有预警"
+- ⚠️ **彩云的「预警数据」是增值服务**，免费额度不含：免费 token 调 `realtime?alert=true` 只有 `status=ok`、
+  **没有 `result.alert`**；脚本会明确提示去控制台开通（或改用 `apihz` / `generic`）
 - 详细注册清单、`.env` 填法、字段映射、上线检查清单：见 [`docs/气象预警接入说明.md`](docs/气象预警接入说明.md)

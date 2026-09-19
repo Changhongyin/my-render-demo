@@ -46,5 +46,9 @@ venv/
 spider.log
 spider_error.log
 
+# 展示页自检生成的临时产物（python3 tests/frontend_test_gen.py 生成，可随时重建）
+tests/farm_test.build.js
+preview_v2.js
+
 # 从数据库/控制台导出的临时文件（要纳入版本控制就删掉这行）
 data.csv
