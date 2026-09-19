@@ -20,17 +20,23 @@ public/farm.html          ★ 展示页（客户端 fetch /data.json）    ← �
 public/index.html           早期"调云函数"版页面（后端已归档，不建议上传）
 local_spider_v2.py        ★ 本地数据生成脚本（抓取 + 历史累积 + 模拟补齐 + 自动备份，不连数据库）
 fetch_weather_alerts.py   ★ 气象预警接入脚本（多来源可插拔 + --mock 联调；失败不写文件，详见 docs/气象预警接入说明.md）
+fetch_nbs_prices.py       ★ 国家统计局价格接入脚本（旬报农资/饲料成本 + CPI；只写 data.json 的 nbs 块，详见 docs/国家统计局数据接入说明.md）
+run_daily_update.sh       ★ 一键更新流水线：抓取行情 → 抓气象/统计局 → 完整性校验 → 上传腾讯云静态托管
+run_daily_update.command    Finder 里双击即可运行的入口（跑完窗口保留，方便看结果）
 .env.example               气象预警 API 的配置模板（cp .env.example .env 后填写；.env 已被 git 忽略）
 backups/                    每次写入前的自动备份（只保留最近 7 份）
-scripts/                    定时任务 + 一键测试
-  ├── run_spider.sh             定时任务执行入口（写 spider.log / spider_error.log）
-  ├── com.yuntian.spider.plist  launchd 任务定义（每天 07:00）
-  ├── install_launchd.sh        安装定时任务
-  ├── uninstall_launchd.sh      卸载定时任务（含 crontab 备选写法）
+scripts/                    运维脚本 + 一键测试
+  ├── restore_foreign_blocks.py  🛡️ 防御网：把被行情脚本吞掉的 weather / nbs / meta 标注补回来
+  ├── run_spider.sh             只抓行情的入口（已被 run_daily_update.sh 覆盖，保留作单独调试用）
+  ├── uninstall_launchd.sh      清理历史遗留的 launchd 任务（com.yuntian.spider）
+  ├── uninstall_dailyupdate.sh  清理历史遗留的 launchd 任务（com.yuntian.dailyupdate）
   └── run_all_tests.sh          一键跑完"在用代码"的全部测试
+  （定时任务的 plist 与安装脚本已按决定删除；本项目不再使用定时方案，日常用 run_daily_update.sh）
 tests/                      只测"还在用"的东西，全部不联网，可随时跑
   ├── spider_v2_test.py             ★ 主脚本 85 项自测
-  ├── frontend_test_gen.py          ★ 展示页 86 项自检（23 项 CSS + 63 项渲染逻辑）
+  ├── frontend_test_gen.py          ★ 展示页 125 项自检（32 项 CSS + 93 项渲染逻辑，含官方参考卡片）
+  ├── weather_alert_test.py         ★ 气象预警脚本 117 项自测
+  ├── nbs_prices_test.py            ★ 国家统计局脚本 60 项自测（含"只动 nbs"验证）
   ├── check_farm_renders_current_data.py  用真实 data.json 冒烟检查展示页
   └── preview_v2_migration.py       用真实 data.json 做"模拟抓取"预览（带写盘护栏）
 docs/前端数据对接需求书.md    给前端同学的数据对接文档
@@ -99,27 +105,23 @@ python3 tests/spider_v2_test.py
 
 ---
 
-## 四、每日定时任务（macOS launchd）
+## 四、每日更新方式：手动一键执行（不做定时任务）
+
+本机实测：**macOS 的 launchd 与 cron 都受 TCC 隐私保护限制，读不到 `~/Documents` 下的项目目录**
+（报错 `Operation not permitted`，退出码 126）。本项目决定**不申请「完全磁盘访问权限」、也不迁移目录**，
+因此采用"手动一键执行"，每天顺手跑一次即可：
 
 ```bash
-# 安装：每天早晨 07:00 自动执行
-bash scripts/install_launchd.sh
-
-# 立即试跑一次，确认能跑通
-launchctl kickstart -k gui/$(id -u)/com.yuntian.spider
-
-# 看结果
-cat spider.log           # 成功摘要（每次运行一段）
-cat spider_error.log     # 失败详情（含完整报错，用于排查）
-
-# 卸载
-bash scripts/uninstall_launchd.sh
+cd /Users/user/Documents/my-render-demo
+bash run_daily_update.sh          # 完整流水线：抓取 → 校验 → 上传云端
+# 或在 Finder 里双击 run_daily_update.command（效果相同，窗口保留方便看结果）
 ```
 
-- 时间写在 `scripts/com.yuntian.spider.plist` 的 `StartCalendarInterval`（默认 `7:00`）。
-- **电脑在睡眠怎么办**：launchd 会在唤醒后**补跑**一次；这是选 launchd 而不是 cron 的主要原因（cron 睡眠时会直接跳过）。
-- 两个日志各自只保留最近 2000 行，不会无限增长。
-- 更习惯 cron 的话，`scripts/uninstall_launchd.sh` 文件末尾附了可直接复制的 crontab 写法。
+- 结果摘要写进 `update.log`，失败/跳过的详情写进 `update_error.log`（各自只保留最近 2000 行）。
+- 每一步做什么、有哪些开关、云端怎么配：见第十六节。
+- 定时任务的 plist 与安装脚本**已按决定删除**；只保留 `scripts/uninstall_launchd.sh` 与
+  `scripts/uninstall_dailyupdate.sh`，用于清理其它机器上可能残留的旧任务。
+- 若将来确实要恢复定时：先给解释器开「完全磁盘访问权限」或把项目移出 `~/Documents`，再从 git 历史找回配置重建。
 
 ## 五、数据格式（`data.json` 关键字段）
 
@@ -214,8 +216,10 @@ cp backups/data_2026_09_18.json public/data.json
 ```bash
 python3 tests/spider_v2_test.py             # 主脚本自测（85 项，不联网，含历史累积/补齐/备份/幂等）
 python3 tests/check_farm_renders_current_data.py   # 用真实 data.json 冒烟检查展示页
+python3 tests/weather_alert_test.py         # 气象预警脚本自测（117 项，含"空数组也算成功""无权限不伪装"）
+python3 tests/nbs_prices_test.py            # 国家统计局脚本自测（60 项，含"只动 nbs""失败不落盘"）
 
-# 展示页的完整自检（23 项 CSS + 63 项渲染逻辑，覆盖 crops / items / 数组 三种格式）
+# 展示页的完整自检（32 项 CSS + 93 项渲染逻辑，覆盖 crops / items / 数组 三种格式，含 nbs 官方参考卡片）
 python3 tests/frontend_test_gen.py && \
   /System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc -m tests/farm_test.build.js
 
@@ -295,11 +299,14 @@ A：正常。要累积满 90 天才会变 `false`。当前图表里"近 7 日"�
 **Q：想让图表**完全没有**模拟数据？**
 A：把 `PAD_MODE` 改成 `"repeat"`（平线）或 `"none"`（不补），前端会显示"历史数据累积中"。
 
-**Q：定时任务好像没跑？**
-A：① `launchctl list | grep yuntian` 看是否加载；② 看 `logs/launchd.err.log`；③ 手动 `launchctl kickstart -k gui/$(id -u)/com.yuntian.spider` 试跑；④ 确认电脑当时是否开机（睡眠会在唤醒后补跑）。
+**Q：数据好像没更新？**
+A：本项目是**手动一键执行**（不做定时任务）。手动跑一次：`bash run_daily_update.sh`，
+然后看 `update.log`（成功摘要）与 `update_error.log`（失败详情）。
+历史遗留的定时任务可用 `launchctl list | grep yuntian` 检查，`bash scripts/uninstall_launchd.sh` 清理。
 
-**Q：想改抓取时间？**
-A：改 `scripts/com.yuntian.spider.plist` 里的 `Hour`/`Minute`，然后重新执行 `bash scripts/install_launchd.sh`。
+**Q：为什么没有定时任务了？**
+A：launchd / cron 都受 macOS TCC 限制，读不到 `~/Documents` 下的项目（实测 `Operation not permitted`）。
+本项目选择不开「完全磁盘访问权限」、也不迁移目录，改用"手动一键执行"（详见第四节与第十六节）。
 
 ---
 
@@ -376,3 +383,93 @@ python3 tests/weather_alert_test.py
 - ⚠️ **彩云的「预警数据」是增值服务**，免费额度不含：免费 token 调 `realtime?alert=true` 只有 `status=ok`、
   **没有 `result.alert`**；脚本会明确提示去控制台开通（或改用 `apihz` / `generic`）
 - 详细注册清单、`.env` 填法、字段映射、上线检查清单：见 [`docs/气象预警接入说明.md`](docs/气象预警接入说明.md)
+
+---
+
+## 十五、国家统计局价格接入（`fetch_nbs_prices.py`）
+
+给页面补上"投入端"视角：**农资与饲料成本**（旬报）+ **CPI 食品口径**（月度），全部来自国家统计局公开数据。
+
+```
+抓国家统计局（列表页定位 → 文章页表格解析）→ 归一化 → 写入 data.json 的新顶层块 nbs
+   ├─ nbs.junbao.inputs[]  农资与饲料成本：玉米/小麦/稻米/大豆/豆粕/生猪 + 尿素/磷肥/钾肥/复合肥/农药 + 柴油
+   │                       每行带 原值(元) / price_per_kg(元/公斤) / 涨跌 / 涨跌幅% / 期次 / 发布机构
+   ├─ nbs.cpi              居民消费价格：同比/环比/累计 + 「其中食品」+ 鲜菜/蛋类/猪肉等细项（只取同比段落）
+   └─ nbs.source/url/published_at/fetched_at/data_kind  来源、期次、发布时间，如实标注
+```
+
+⚠️ **只替换 `nbs` 一个键**：`meta` / `crops` / `weather` 原样保留（代码里还有一道防御性校验，
+万一改坏了会直接报错中止）。三个脚本的分工：行情 → `crops`，预警 → `weather`，统计局 → `nbs`。
+
+```bash
+# 第一步：干跑，只打印不落盘（推荐先跑这个核对结构）
+python3 fetch_nbs_prices.py --dry-run
+
+# 只写一个临时文件（肉眼核对 JSON）
+python3 fetch_nbs_prices.py --out /tmp/nbs.json
+
+# 正式写入 data.json + public/data.json（先自动备份成 backups/data_nbs_YYYY_MM_DD.json）
+python3 fetch_nbs_prices.py
+
+# 只取旬报，不要 CPI
+python3 fetch_nbs_prices.py --no-cpi
+
+# 自测（离线，60 项，含"失败不落盘""meta/crops/weather 一个字节都没动"）
+python3 tests/nbs_prices_test.py
+```
+
+- 数据源：`https://www.stats.gov.cn/sj/zxfb/`（国家统计局「数据 > 数据发布」）；旬报每月上/中/下旬各一期、CPI 每月一期，**每天跑一次足够**
+- 抓取失败 → **退出码 1，现有 data.json 一个字节都不动**；`nbs.cpi` 失败只告警（不影响旬报落盘）
+- 单位换算如实可查：`price` 是统计局原值（元/吨 或 元/千克），`price_per_kg` 是换算值（元/公斤），只做 ÷1000，不改数值
+- ⚠️ `data.stats.gov.cn` 的 JSON 接口（国家数据）实测被 WAF 拦（403 UrlACL），所以本脚本走**公开页面表格解析**，
+  不绕过任何风控；也不要高频请求（脚本自带 1–3 秒随机延迟 + 重试）
+- 合规：页面必须显示来源与期次（`nbs.junbao.source` + `published_at`），数值与口径不得篡改
+- 详细数据集清单、取数方案对比、排错表：见 [`docs/国家统计局数据接入说明.md`](docs/国家统计局数据接入说明.md)
+
+---
+
+## 十六、一键更新流水线（`run_daily_update.sh`）
+
+日常只需要一条命令（或在 Finder 里双击 `run_daily_update.command`）：
+
+```bash
+cd /Users/user/Documents/my-render-demo
+bash run_daily_update.sh
+```
+
+结果摘要写进 `update.log`，失败/跳过的详情写进 `update_error.log`：
+
+| 步骤 | 实际命令 | 失败策略 |
+|---|---|---|
+| [1/5] 抓行情 | `python3 local_spider_v2.py` | **硬步骤**：失败立即停止，`data.json` 一个字节都不动 |
+| 🛡️ 防御网 | `python3 scripts/restore_foreign_blocks.py` | 从行情脚本写入前的备份补回 `weather` / `nbs` / meta 标注（正常时打印"无需恢复"） |
+| [2/5] 抓气象预警 | `python3 fetch_weather_alerts.py --write` | 软步骤（彩云无预警权限时默认不中断整条链） |
+| [3/5] 抓国家统计局 | `python3 fetch_nbs_prices.py` | 软步骤；只在每月 5/15/25 日跑（旬报 4/14/24 发布），`FORCE_NBS=1` 可强制 |
+| [4/5] 完整性校验 | crops / 价格 / 两份文件一致 / 新鲜度 | **硬步骤** |
+| [5/5] 云端同步 | `tcb hosting deploy public/data.json /data.json`<br>`tcb hosting deploy public/farm.html /farm.html` | 未配置环境 ID 或未登录 → 跳过并给出指引；`UPLOAD_STRICT=1` 可设为硬步骤 |
+
+常用开关：`STRICT_ALL=1`（任何一步失败都致命）、`SKIP_UPLOAD=1`（只更新本地）、`FORCE_NBS=1`、`WEATHER_STRICT=1`、`NBS_STRICT=1`、`UPLOAD_STRICT=1`。
+
+### 云端上传的一次性配置
+
+```bash
+npm install -g @cloudbase/cli   # 本机已装：CloudBase CLI 3.8.3（/opt/homebrew/bin/tcb）
+tcb login                       # 交互式；或 tcb login --apiKeyId <SecretId> --apiKey <SecretKey>
+tcb env list                    # 验证登录成功（能看到环境列表即 OK）
+# 再把环境 ID 写进 .env（CloudBase 控制台 → 环境 → 环境 ID，形如 myenv-1a2b3c4d）：
+#   TCB_ENV_ID=your-env-id
+```
+
+配好后再跑一次，第 [5/5] 步会显示：`✅ 已上传：public/data.json → /data.json、public/farm.html → /farm.html`。
+
+### 为什么不做定时任务（2026-09-19 实测结论）
+
+macOS 的 **launchd 与 cron 都受 TCC 隐私保护限制**，读不到 `~/Documents` 下的项目目录，实测报错：
+
+```
+/bin/bash: /Users/user/Documents/my-render-demo/run_daily_update.sh: Operation not permitted（退出码 126）
+```
+
+我们的选择：**不申请「完全磁盘访问权限」、也不迁移项目目录**，改为"手动一键执行"。
+定时任务的 plist 与安装脚本已按决定删除（只留 `uninstall_*.sh` 清理历史残留）；
+将来若要恢复定时：先给解释器开完全磁盘访问权限（或把项目移出 `~/Documents`），再从 git 历史找回配置重建。

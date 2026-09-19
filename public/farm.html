@@ -101,6 +101,29 @@
         .alert-card.lv-blue { background: #e3f2fd; border-color: #a6d4f5; border-left-color: #1e90ff; }
         .alert-card.lv-blue .alert-level { background: #1e90ff; }
         .alert-card.lv-blue .alert-title { color: #10456e; }
+
+        /* ===== 官方参考卡片（国家统计局 · 农资与饲料成本）=====
+           蓝色系：和绿色行情卡、橙色预警卡一眼分开；
+           内容是"官方宏观参考"而不是风险提示，所以用克制的浅蓝底 + 蓝色左边条。 */
+        .nbs-card { margin-top: 16px; padding: 14px 14px 12px 16px; border: 1px solid #b3d8f2; border-left: 8px solid #1e90ff; border-radius: 14px; background: #eaf4fe; box-shadow: 0 1px 2px rgba(12, 52, 92, .08); }
+        .nbs-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+        .nbs-icon { font-size: 20px; line-height: 1; }
+        .nbs-title { font-size: 18px; font-weight: 800; color: #10456e; }
+        .nbs-sub { margin-top: 4px; font-size: 13px; color: #4a7ba7; }
+        .nbs-group { margin-top: 10px; }
+        .nbs-group-title { font-size: 14px; font-weight: 700; color: #10456e; padding-left: 8px; border-left: 4px solid #7fbdf5; }
+        .nbs-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 9px 2px; border-bottom: 1px dashed rgba(30, 144, 255, .28); }
+        .nbs-row:last-child { border-bottom: none; }
+        .nbs-name { font-size: 16px; }
+        .nbs-price { margin-left: auto; font-size: 18px; font-weight: 800; color: #10456e; font-variant-numeric: tabular-nums; }
+        .nbs-unit { margin-left: 2px; font-size: 12px; font-weight: 400; color: #4a7ba7; }
+        .nbs-pct { min-width: 72px; text-align: right; font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        /* 红涨绿跌（和行情/预警配色体系一致）；0 或缺失显示 —，且不染红绿 */
+        .nbs-pct.up { color: #e53935; }
+        .nbs-pct.down { color: #2e7d52; }
+        .nbs-pct.flat { color: #7a8b99; font-weight: 500; }
+        .nbs-meta { margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(30, 144, 255, .3); font-size: 12.5px; line-height: 1.6; color: #4a7ba7; }
+        .nbs-meta a { color: #1e90ff; text-decoration: none; }
     </style>
 </head>
 <body>
@@ -428,6 +451,120 @@
             return true;
         }
 
+        /* ==================== 四、官方参考卡片（国家统计局） ====================
+           nbs 块由 fetch_nbs_prices.py 独立写入（不碰 meta / crops / weather）：
+             payload.nbs = { source, data_kind, fetched_at,
+                             junbao: { period, published_at, source, url,
+                                       total_products, kept_products,
+                                       inputs: [ { group_key, name, unit, price,
+                                                   price_per_kg, price_unit,
+                                                   change, change_pct } ] },
+                             cpi: { … } }
+           容错：没有 nbs / inputs 为空 / 类型不对 → 整张卡片不渲染，不报错、也不留空白。
+           安全：所有文本一律 escapeHtml；链接只放行 http/https（挡掉 javascript: 之类）。 */
+
+        var NBS_GROUP_ORDER = ['农产品', '农业生产资料', '运输能源'];   // 展示顺序，其它类目排在最后
+
+        // 涨跌幅：0 或缺失/脏值 → —（不能把"没数据"画成 0.0%）
+        function nbsPctText(value) {
+            var n = Number(value);
+            if (!isFinite(n) || n === 0) return '—';
+            return (n > 0 ? '+' : '') + n.toFixed(1) + '%';
+        }
+
+        // 红涨绿跌；0 或缺失用中性灰（flat）
+        function nbsPctClass(value) {
+            var n = Number(value);
+            if (!isFinite(n) || n === 0) return 'flat';
+            return n > 0 ? 'up' : 'down';
+        }
+
+        // 价格统一展示 2 位小数（统计局原值仍在 data.json 的 price 字段里，可随时核对）
+        function nbsPriceText(value) {
+            var n = Number(value);
+            return isFinite(n) ? n.toFixed(2) : '—';
+        }
+
+        // 只允许 http/https：防止数据里夹带 javascript: / data: 之类的伪链接
+        function safeUrl(url) {
+            var s = String(url === null || url === undefined ? '' : url).trim();
+            return /^https?:\/\//i.test(s) ? s : '';
+        }
+
+        // 单条农资/饲料 → HTML
+        function nbsRowHtml(row) {
+            var r = row || {};
+            return '<div class="nbs-row">'
+                + '<span class="nbs-name">' + escapeHtml(r.name || '未命名产品') + '</span>'
+                + '<span class="nbs-price">' + escapeHtml(nbsPriceText(r.price_per_kg))
+                + '<span class="nbs-unit">元/公斤</span></span>'
+                + '<span class="nbs-pct ' + nbsPctClass(r.change_pct) + '">'
+                + escapeHtml(nbsPctText(r.change_pct)) + '</span>'
+                + '</div>';
+        }
+
+        // 渲染官方参考卡片（排在行情卡片、气象预警卡片之后）。没有数据 → 返回 false，不渲染也不报错
+        function renderNbsCard(payload) {
+            if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+            var nbs = payload.nbs;
+            if (!nbs || typeof nbs !== 'object' || Array.isArray(nbs)) return false;
+
+            var junbao = (nbs.junbao && typeof nbs.junbao === 'object') ? nbs.junbao : {};
+            var rows = Array.isArray(junbao.inputs) ? junbao.inputs : [];
+            if (rows.length === 0) return false;          // 没数据 → 静默跳过
+
+            // 按 group_key 分组；认不出的类目归到原键名，并排在预置顺序之后
+            var grouped = {}, order = [];
+            rows.forEach(function (row) {
+                if (!row || typeof row !== 'object') return;
+                var key = String(row.group_key === null || row.group_key === undefined
+                    ? '' : row.group_key).trim() || '其他';
+                if (!grouped[key]) { grouped[key] = []; order.push(key); }
+                grouped[key].push(row);
+            });
+            if (order.length === 0) return false;
+            order.sort(function (a, b) {
+                var ia = NBS_GROUP_ORDER.indexOf(a), ib = NBS_GROUP_ORDER.indexOf(b);
+                return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+            });
+
+            var source = String(junbao.source || nbs.source || '国家统计局').trim();
+            var period = String(junbao.period || '').trim();
+            var published = String(junbao.published_at || '').trim();
+            var publishedDate = published ? published.slice(0, 10) : '';   // 只显示到日期
+            var url = safeUrl(junbao.url);
+
+            var inner = '';
+            order.forEach(function (key) {
+                inner += '<div class="nbs-group">'
+                    + '<div class="nbs-group-title">' + escapeHtml(key) + '</div>';
+                grouped[key].forEach(function (row) { inner += nbsRowHtml(row); });
+                inner += '</div>';
+            });
+
+            // 底部合规标注：来源 + 发布日期（缺哪个就少写哪个，绝不编造）
+            var metaBits = ['数据来源：' + escapeHtml(source)];
+            if (publishedDate) metaBits.push('发布日期：' + escapeHtml(publishedDate));
+            var metaHtml = metaBits.join(' ｜ ');
+            if (url) {
+                metaHtml += ' ｜ <a href="' + escapeHtml(url)
+                    + '" target="_blank" rel="noopener noreferrer">查看原文</a>';
+            }
+
+            var card = document.createElement('div');
+            card.className = 'nbs-card';
+            card.innerHTML =
+                '<div class="nbs-head">' +
+                    '<span class="nbs-icon">📊</span>' +
+                    '<span class="nbs-title">官方参考 · 农资与饲料成本</span>' +
+                '</div>' +
+                (period ? '<div class="nbs-sub">' + escapeHtml(source + ' ' + period) + '</div>' : '') +
+                inner +
+                '<div class="nbs-meta">' + metaHtml + '</div>';
+            sectionsContainer.appendChild(card);
+            return true;
+        }
+
         async function loadData() {
             loadingEl.style.display = 'block';
             sectionsContainer.innerHTML = '';
@@ -507,6 +644,9 @@
 
                 // 气象预警卡片：有预警才渲染；没有预警字段 / 数组为空 → 静默跳过，不影响行情卡片
                 renderAlertCard(payload);
+
+                // 官方参考卡片（国家统计局农资/饲料成本）：没有 nbs / inputs 为空 → 静默跳过
+                renderNbsCard(payload);
 
             } catch (err) {
                 loadingEl.style.display = 'none';

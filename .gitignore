@@ -45,6 +45,8 @@ venv/
 # 定时任务日志（生成物，可随时重建）
 spider.log
 spider_error.log
+update.log
+update_error.log
 
 # 展示页自检生成的临时产物（python3 tests/frontend_test_gen.py 生成，可随时重建）
 tests/farm_test.build.js

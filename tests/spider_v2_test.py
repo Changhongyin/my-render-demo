@@ -353,6 +353,93 @@ check("21 crops[].latest_src 标出最新点来自 demo",
       c21["latest_src"] == "demo", c21.get("latest_src"))
 check("21 crops[].date 仍是最新点的日期（09-18）", c21["date"] == "2026-09-18", c21["date"])
 
+# ---- 用例 22：不吞别的脚本写的数据（weather / nbs / crops[].alerts / meta.weather_*）----
+# 真实踩过的坑：行情脚本重建 data.json 时只写 meta/crops，把 fetch_weather_alerts.py 的 weather 块、
+# fetch_nbs_prices.py 的 nbs 块、crops[].alerts 镜像、meta.weather_* 全吞了 ——
+# 前端橙色预警卡片、蓝色官方参考卡片第二天就消失（每天 07:00 定时跑一次就丢一次）。
+FOREIGN = {
+    "meta": {
+        "location": "山东省寿光市三元朱村",
+        "source": "演示数据",
+        "stat_time": "2026-09-16 07:00",
+        "weather_alert_count": 1,
+        "weather_source": "模拟数据（mock，非真实预警）",
+        "weather_data_kind": "mock",
+        "weather_fetched_at": "2026-09-19 15:43:36",
+        "sources": [
+            {"type": "weather_alert", "name": "模拟数据（mock，非真实预警）"},
+            {"type": "nbs_price", "name": "国家统计局"},
+        ],
+        "notes": ["行情自己的备注（重建时会重写）", "【气象预警】⚠️【模拟数据】仅供前端联调"],
+    },
+    "crops": [{
+        "name": "富强粉",
+        "history": [{"date": "2026-09-18", "price": 2.75, "src": "demo", "grade": "标一"}],
+        "alerts": {"price": [], "supply": [], "risk": ["【暴雨橙色预警】…｜来源：模拟数据"]},
+        "alerts_source": "模拟数据（mock，非真实预警）",
+        "alerts_updated_at": "2026-09-19 15:43:36",
+    }],
+    "weather": {"provider": "mock", "data_kind": "mock", "alert_count": 1,
+                "active_alerts": [{"type": "暴雨", "level": "橙色"}]},
+    "nbs": {"junbao": {"period": "2026年9月上旬"}, "cpi": {"month": "2026年8月"}},
+}
+tmp22, files22 = sandbox(existing=FOREIGN)
+install(html_for([("富强粉", "标一", "2.80", "2026/09/19")]), files22)
+check("22 退出码 0", run_main() == 0)
+out22 = read(files22[0])
+c22 = crops_by_name(out22)["富强粉"]
+check("22 顶层 weather 块没被吞掉",
+      isinstance(out22.get("weather"), dict) and out22["weather"].get("alert_count") == 1,
+      out22.get("weather"))
+check("22 顶层 nbs 块没被吞掉",
+      isinstance(out22.get("nbs"), dict) and out22["nbs"]["junbao"]["period"] == "2026年9月上旬",
+      out22.get("nbs"))
+check("22 crops[].alerts 镜像字符串没被清空", bool((c22.get("alerts") or {}).get("risk")), c22.get("alerts"))
+check("22 crops[].alerts_source 保留",
+      c22.get("alerts_source") == "模拟数据（mock，非真实预警）", c22.get("alerts_source"))
+check("22 meta.weather_data_kind 保留",
+      out22["meta"].get("weather_data_kind") == "mock", out22["meta"].get("weather_data_kind"))
+check("22 meta.weather_source 保留",
+      "模拟" in str(out22["meta"].get("weather_source")), out22["meta"].get("weather_source"))
+check("22 meta.sources 里别人写的署名保留（按 type 合并、不重复）",
+      any(s.get("type") == "weather_alert" for s in out22["meta"].get("sources") or [])
+      and any(s.get("type") == "nbs_price" for s in out22["meta"].get("sources") or []),
+      out22["meta"].get("sources"))
+check("22 notes 里【气象预警】说明保留",
+      any(str(n).startswith("【气象预警】") for n in out22["meta"].get("notes") or []),
+      out22["meta"].get("notes"))
+check("22 行情自己仍正常更新（价格写进去了）", c22.get("latest") == 2.8, c22.get("latest"))
+check("22 顶层没有多余的脏键", set(out22.keys()) == {"meta", "crops", "weather", "nbs"}, list(out22.keys()))
+
+# ---- 用例 23：旧格式遗留键不会被误搬；meta 只认白名单前缀 ----
+LEGACY_WITH_JUNK = {
+    "location": "旧文件的位置（不应被搬）",
+    "source": "旧文件来源（不应被搬）",
+    "stat_time": "2026-09-18 07:00",
+    "items": [{"name": "富强粉", "level": "标一", "price": 2.8, "date": "2026/09/18"}],
+    "meta": {"bogus_legacy": "不应被搬进来", "weather_source": "模拟数据（mock，非真实预警）"},
+}
+tmp23, files23 = sandbox(existing=V1_DEMO)
+install(html_for([("富强粉", "标一", "2.80", "2026/09/19")]), files23)
+check("23 v1 输入仍能正常迁移并写入", run_main() == 0)
+out23 = read(files23[0])
+check("23 顶层只剩 meta / crops（没把 items/location 搬回来）",
+      set(out23.keys()) == {"meta", "crops"}, list(out23.keys()))
+
+tmp24, files24 = sandbox(existing=LEGACY_WITH_JUNK)
+install(html_for([("富强粉", "标一", "2.80", "2026/09/19")]), files24)
+check("24 带脏 meta 的 v1 文件也能正常写入", run_main() == 0)
+out24 = read(files24[0])
+check("24 顶层仍是 meta / crops（标量/数组遗留键被挡住）",
+      set(out24.keys()) == {"meta", "crops"}, list(out24.keys()))
+check("24 meta 里没有混进无前缀的 legacy 键（bogus_legacy）",
+      "bogus_legacy" not in out24["meta"], list(out24["meta"].keys()))
+check("24 meta 里没有混进 items",
+      "items" not in out24["meta"], list(out24["meta"].keys()))
+check("24 meta 里的 weather_ 前缀字段按白名单保留",
+      out24["meta"].get("weather_source") == "模拟数据（mock，非真实预警）",
+      out24["meta"].get("weather_source"))
+
 # ---- 汇总 ----
 print("\n================ 结果 ================")
 failed = 0

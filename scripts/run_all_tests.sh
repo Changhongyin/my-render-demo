@@ -27,7 +27,7 @@ echo "=============================================="
 # 数据生成脚本（85 项，不联网，含历史累积/补齐/备份/幂等/诚实标注）
 run "local_spider_v2.py 自测" python3 tests/spider_v2_test.py
 
-# 展示页：静态检查 + 渲染逻辑（86 项）
+# 展示页：静态检查 + 渲染逻辑（125 项 = 32 项 CSS + 93 项渲染）
 printf '\n\033[1m▶ farm.html 展示页（CSS 检查 + 渲染逻辑）\033[0m\n'
 if python3 tests/frontend_test_gen.py >/dev/null && "$JSC" -m tests/farm_test.build.js >/dev/null; then
   printf '  ✅ 通过\n'
@@ -51,6 +51,9 @@ fi
 
 # 气象预警接入脚本（离线，含 mock 模式与"失败不写文件"验证）
 run "fetch_weather_alerts.py 自测" python3 tests/weather_alert_test.py
+
+# 国家统计局价格接入脚本（离线，含"只动 nbs / 失败不落盘 / 备份"验证）
+run "fetch_nbs_prices.py 自测" python3 tests/nbs_prices_test.py
 
 # 归档代码的测试：默认【不跑】——它们测的是已废弃的数据库/云函数方案。
 # 需要时手动执行（路径在 archive_deprecated/ 里）：

@@ -611,6 +611,90 @@ def save_json(payload):
 
 # ==================== 主流程 ====================
 
+# 别的脚本会往 meta 里写的字段前缀（本脚本重建 meta 时要跟着传下去）
+FOREIGN_META_PREFIXES = ("weather_", "nbs_", "alert_")
+
+
+def restore_foreign_meta(output, raw):
+    """把其它脚本写在 meta 上的字段跟着传下去（本脚本重建 meta，默认会丢掉它们）。
+
+    气象脚本会写 meta.weather_source / weather_data_kind / weather_fetched_at /
+    weather_provider / weather_alert_count，并在 meta.sources 里加一条 weather_alert 署名、
+    在 meta.notes 里加一行【气象预警】说明。前端在"没有顶层 weather 块"时会读 meta.weather_*
+    兜底，丢了会让预警卡片缺来源标注、"模拟数据"提示也一起丢。
+
+    规则（宁可少补、绝不多搬）：
+      · 只按前缀白名单补（weather_ / nbs_ / alert_），不会把旧格式遗留的 items/location 搬进来
+      · sources 按 type 去重合并，保留别人写的署名
+      · notes 只补以【开头的他人说明，且不重复
+    """
+    if not isinstance(raw, dict) or not isinstance(raw.get("meta"), dict):
+        return []
+    old_meta = raw["meta"]
+    kept = []
+
+    for key, value in old_meta.items():
+        if key in ("sources", "notes"):
+            continue
+        if key.startswith(FOREIGN_META_PREFIXES) and key not in output["meta"]:
+            output["meta"][key] = value
+            kept.append(key)
+
+    old_sources = [s for s in (old_meta.get("sources") or []) if isinstance(s, dict)]
+    new_sources = [s for s in (output["meta"].get("sources") or []) if isinstance(s, dict)]
+    have_types = set(s.get("type") for s in new_sources)
+    added_sources = [s for s in old_sources if s.get("type") and s.get("type") not in have_types]
+    if added_sources:
+        output["meta"]["sources"] = new_sources + added_sources
+        kept.append("sources(+%d)" % len(added_sources))
+
+    out_notes = list(output["meta"].get("notes") or [])
+    foreign_notes = [n for n in (old_meta.get("notes") or [])
+                     if str(n).startswith("【") and n not in out_notes]
+    if foreign_notes:
+        output["meta"]["notes"] = out_notes + foreign_notes
+        kept.append("notes(+%d)" % len(foreign_notes))
+    return kept
+
+
+def restore_crop_alerts(output, raw):
+    """把其它脚本写在 crops[].alerts 上的预警字段跟着传下去。
+
+    本脚本用台账重建 crops，会丢掉 fetch_weather_alerts.py 写在每个品种上的
+    alerts / alerts_source / alerts_updated_at；前端有一条"没有 weather 块时就读
+    crops[].alerts.* 字符串"的兜底路径，丢了会让预警卡片整个消失。
+    规则：只在当前值为空/缺失时补，有值的一律不动（谁写的数据谁说话）。
+    """
+    if not isinstance(raw, dict):
+        return []
+    old_by_name = {}
+    for crop in raw.get("crops") or []:
+        if isinstance(crop, dict) and crop.get("name"):
+            old_by_name[crop["name"]] = crop
+
+    def is_empty(value):
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return not value.strip()
+        if isinstance(value, (list, tuple, set)):
+            return len(value) == 0
+        if isinstance(value, dict):
+            return not any(v for v in value.values() if v)
+        return False
+
+    kept = []
+    for crop in output.get("crops") or []:
+        src = old_by_name.get(crop.get("name"))
+        if not src:
+            continue
+        for key in ("alerts", "alerts_source", "alerts_updated_at"):
+            if key in src and is_empty(crop.get(key)):
+                crop[key] = src[key]
+                kept.append("%s.%s" % (crop.get("name"), key))
+    return kept
+
+
 def main():
     parser = argparse.ArgumentParser(description="抓取行情并累积进历史台账")
     parser.add_argument("--dry-run", action="store_true", help="只预览将要写入的内容，不落盘、不备份")
@@ -654,6 +738,27 @@ def main():
 
     # 4. 编译成前端要的结构
     output = build_output(history, notes, scraped_names)
+
+    # 4.5 原样保留「别人的」数据块 —— 本脚本只管 meta / crops，但 data.json 里还有
+    #     weather（fetch_weather_alerts.py 写的气象预警）与 nbs（fetch_nbs_prices.py 写的
+    #     国家统计局数据）。它们必须跟着一起传下去，否则每天定时一跑就把前端橙色预警卡片、
+    #     蓝色官方参考卡片的数据整块吞掉（三个脚本分工写不同键，谁也别吞谁的）。
+    #     判定：只认"对象型"顶层键 —— 旧格式遗留的 items/location 等标量或数组不会被误搬回来。
+    if isinstance(raw, dict):
+        foreign_keys = [k for k, v in raw.items()
+                        if k not in ("meta", "crops") and isinstance(v, dict)]
+        for key in foreign_keys:
+            output[key] = raw[key]
+        if foreign_keys:
+            print("🤝 原样保留其它脚本写入的数据块：%s" % "、".join(foreign_keys))
+
+    kept_meta = restore_foreign_meta(output, raw)
+    if kept_meta:
+        print("🤝 原样保留 meta 上其它脚本写的字段：%s" % "、".join(kept_meta))
+
+    kept_alerts = restore_crop_alerts(output, raw)
+    if kept_alerts:
+        print("🤝 原样保留 crops 上的预警字段：%s" % "、".join(kept_alerts))
 
     if not output["crops"]:
         print("❌ 台账为空，拒绝写出空文件（避免覆盖上一次的好数据）。")

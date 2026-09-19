@@ -59,6 +59,25 @@ function cardHtml() {
     var c = els['sections-container'].children;
     return (c.length === 1) ? c[0].innerHTML : '(卡片数量=' + c.length + ')';
 }
+function cardCount() { return els['sections-container'].children.length; }
+function cardClasses() {
+    return els['sections-container'].children.map(function (c) { return String(c.className); }).join(' | ');
+}
+// 取出官方参考卡片（国家统计局）的 innerHTML；没有这张卡就返回空串
+function nbsCardHtml() {
+    var c = els['sections-container'].children;
+    for (var i = 0; i < c.length; i++) {
+        if (String(c[i].className).indexOf('nbs-card') >= 0) return c[i].innerHTML;
+    }
+    return '';
+}
+function lastCardClass() {
+    var c = els['sections-container'].children;
+    return c.length ? String(c[c.length - 1].className) : '';
+}
+function countOf(haystack, needle) {
+    return (haystack.match(new RegExp(needle, 'g')) || []).length;
+}
 
 var ITEMS = [
     { name: '富强粉', level: '标一', price: 2.8, date: '2026/09/18' },
@@ -249,6 +268,132 @@ check('M meta 缺失时仍能渲染数据', cardHtml().indexOf('富强粉') >= 0
 check('M meta 缺失时位置回退为全国', els['location-info'].textContent.indexOf('全国') >= 0, els['location-info'].textContent);
 check('M meta 缺失时不显示角标', els['source-badge'].style.display === 'none', els['source-badge'].style.display);
 
+// ---- N：官方参考卡片（国家统计局 nbs 块）----
+var NBS_FULL = {
+    meta: { location: '山东省寿光市三元朱村', source: '实时抓取', stat_time: '2026-09-16 07:00' },
+    crops: [{ name: '富强粉', grade: '标一', latest: 2.8, date: '2026-09-18' }],
+    nbs: {
+        generator: 'fetch_nbs_prices.py', data_kind: 'live', fetched_at: '2026-09-19 16:23:25',
+        source: '国家统计局',
+        junbao: {
+            period: '2026年9月上旬', published_at: '2026-09-14 09:30', source: '国家统计局',
+            url: 'https://www.stats.gov.cn/sj/zxfb/202609/t20260914_1965293.html',
+            total_products: 50, kept_products: 5,
+            inputs: [
+                { group_key: '农产品', name: '玉米（黄玉米二等）', unit: '吨', price: 2236.8, price_per_kg: 2.2368, change_pct: -0.1 },
+                { group_key: '农产品', name: '豆粕（粗蛋白含量≥43%）', unit: '吨', price: 3305.8, price_per_kg: 3.3058, change_pct: 3.7 },
+                { group_key: '农产品', name: '复合肥（硫酸钾复合肥）', unit: '吨', price: 3619.4, price_per_kg: 3.6194, change_pct: 0 },
+                { group_key: '农业生产资料', name: '尿素（中小颗粒）', unit: '吨', price: 1771.9, price_per_kg: 1.7719, change_pct: 1.5 },
+                { group_key: '运输能源', name: '柴油（0#国VI）', unit: '吨', price: 8711.3, price_per_kg: 8.7113, change_pct: 4.6 }
+            ]
+        }
+    }
+};
+await scenario(NBS_FULL, false);
+var nh = nbsCardHtml();
+check('N 官方参考卡片已渲染', nh.length > 0, nh);
+check('N 卡片标题正确', nh.indexOf('官方参考 · 农资与饲料成本') >= 0, nh);
+check('N 副标题为「国家统计局 2026年9月上旬」', nh.indexOf('国家统计局 2026年9月上旬') >= 0, nh);
+check('N 卡片排在最后（行情 → 预警 → 官方参考）', lastCardClass().indexOf('nbs-card') >= 0, cardClasses());
+check('N 三个分组都渲染',
+      nh.indexOf('>农产品<') >= 0 && nh.indexOf('>农业生产资料<') >= 0 && nh.indexOf('>运输能源<') >= 0, nh);
+check('N 分组顺序：农产品 → 农业生产资料 → 运输能源',
+      nh.indexOf('>农产品<') < nh.indexOf('>农业生产资料<')
+      && nh.indexOf('>农业生产资料<') < nh.indexOf('>运输能源<'), nh);
+check('N 名称与价格（保留 2 位小数）正确',
+      nh.indexOf('玉米（黄玉米二等）') >= 0 && nh.indexOf('2.24') >= 0, nh);
+check('N 单位显示「元/公斤」', nh.indexOf('元/公斤') >= 0, nh);
+check('N 上涨用红色 up 且带 + 号', nh.indexOf('nbs-pct up">+3.7%') >= 0, nh);
+check('N 下跌用绿色 down', nh.indexOf('nbs-pct down">-0.1%') >= 0, nh);
+check('N 涨跌幅为 0 时显示 — 且不染红绿', nh.indexOf('nbs-pct flat">—') >= 0, nh);
+check('N 底部标注：数据来源 + 发布日期',
+      nh.indexOf('数据来源：国家统计局') >= 0 && nh.indexOf('发布日期：2026-09-14') >= 0, nh);
+check('N 原文链接可点（http/https）',
+      nh.indexOf('href="https://www.stats.gov.cn/sj/zxfb/202609/t20260914_1965293.html"') >= 0, nh);
+
+// 容错 1：完全没有 nbs 字段 → 静默隐藏，不报错、不影响行情卡
+await scenario({ meta: { location: '山东省寿光市三元朱村' },
+                 crops: [{ name: '富强粉', grade: '标一', latest: 2.8, date: '2026-09-18' }] }, false);
+check('N 没有 nbs 时静默隐藏卡片', nbsCardHtml() === '' && cardCount() === 1, '卡片数=' + cardCount());
+check('N 没有 nbs 时不报错', els['error-msg'].textContent === '', els['error-msg'].textContent);
+
+// 容错 2：inputs 为空数组 → 不渲染卡片
+await scenario({ crops: [{ name: '富强粉', grade: '标一', latest: 2.8, date: '2026-09-18' }],
+                 nbs: { junbao: { period: '2026年9月上旬', inputs: [] } } }, false);
+check('N inputs 为空数组时也不渲染卡片', nbsCardHtml() === '', nbsCardHtml());
+
+// 容错 3：nbs / junbao 类型异常 → 不崩、不渲染
+await scenario({ crops: [{ name: '富强粉', grade: '标一', latest: 2.8, date: '2026-09-18' }], nbs: 'oops' }, false);
+check('N nbs 是字符串时不崩也不渲染',
+      nbsCardHtml() === '' && els['error-msg'].textContent === '', nbsCardHtml());
+await scenario({ crops: [{ name: '富强粉', grade: '标一', latest: 2.8, date: '2026-09-18' }], nbs: {} }, false);
+check('N nbs 是空对象时静默隐藏', nbsCardHtml() === '', nbsCardHtml());
+await scenario({ crops: [{ name: '富强粉', grade: '标一', latest: 2.8, date: '2026-09-18' }],
+                 nbs: { junbao: 'oops' } }, false);
+check('N junbao 类型异常时静默隐藏', nbsCardHtml() === '', nbsCardHtml());
+
+// 容错 4：脏行（null / 非对象 / 缺字段 / 脏价格）→ 跳过脏行，正常行照常渲染
+var NBS_DIRTY = {
+    crops: [{ name: '富强粉', grade: '标一', latest: 2.8, date: '2026-09-18' }],
+    nbs: { junbao: { source: '国家统计局', period: '', published_at: '', inputs: [
+        { group_key: '农产品', name: '正常产品', price_per_kg: 2.5, change_pct: -1.2 },
+        { name: '缺 group_key 的产品', price_per_kg: 3, change_pct: null },
+        null,
+        'not-an-object',
+        { group_key: '农产品', name: '价格是脏值', price_per_kg: 'abc' }
+    ] } }
+};
+await scenario(NBS_DIRTY, false);
+var dh = nbsCardHtml();
+check('N 脏行被跳过（null / 非对象），正常行仍渲染',
+      dh.indexOf('正常产品') >= 0 && countOf(dh, 'class="nbs-row"') === 3,
+      countOf(dh, 'class="nbs-row"') + ' 行');
+check('N 缺 group_key 的行归入「其他」', dh.indexOf('>其他<') >= 0, dh);
+check('N 脏价格显示 —', dh.indexOf('nbs-price">—') >= 0, dh);
+check('N 缺失/为 null 的涨跌幅显示 —', countOf(dh, 'flat">—') >= 2, countOf(dh, 'flat">—') + ' 处');
+check('N 期次为空时不渲染副标题', dh.indexOf('nbs-sub') < 0, dh);
+check('N 发布日期为空时只写来源，不编造日期',
+      dh.indexOf('数据来源：国家统计局') >= 0 && dh.indexOf('发布日期') < 0, dh);
+
+// 安全：XSS 与伪协议链接
+var NBS_XSS = {
+    crops: [{ name: '富强粉', grade: '标一', latest: 2.8, date: '2026-09-18' }],
+    nbs: { junbao: {
+        period: '<img src=x onerror=alert(1)>', published_at: '2026-09-14 09:30',
+        source: '<b>假统计局</b>', url: 'javascript:alert(1)',
+        inputs: [{ group_key: '<script>alert(2)</script>', name: '<script>alert(3)</script>',
+                   price_per_kg: 1, change_pct: 1 }]
+    } }
+};
+await scenario(NBS_XSS, false);
+var xh = nbsCardHtml();
+check('N 危险标签被转义（不含 <script / <img / <b>）',
+      xh.indexOf('<script') < 0 && xh.indexOf('<img') < 0 && xh.indexOf('<b>') < 0, xh);
+check('N 转义实体存在', xh.indexOf('&lt;script&gt;') >= 0, xh);
+check('N javascript: 伪链接被挡（不生成 a 标签）',
+      xh.indexOf('javascript:') < 0 && xh.indexOf('<a href=') < 0, xh);
+
+// 三卡共存：行情（绿）→ 预警（橙）→ 官方参考（蓝）
+var ALL_THREE = {
+    meta: { location: '山东省寿光市三元朱村', source: '实时抓取' },
+    crops: [{ name: '富强粉', grade: '标一', latest: 2.8, date: '2026-09-18' }],
+    weather: { data_kind: 'live', source: '彩云天气 Caiyun', fetched_at: '2026-09-19 16:00:00',
+               active_alerts: [{ type: '暴雨', level: '橙色',
+                                 title: '寿光市气象台发布暴雨橙色预警', text: '预计今天白天到夜间…' }] },
+    nbs: { junbao: { period: '2026年9月上旬', published_at: '2026-09-14 09:30', source: '国家统计局',
+                     inputs: [{ group_key: '农产品', name: '玉米（黄玉米二等）',
+                                price_per_kg: 2.2368, change_pct: -0.1 }] } }
+};
+await scenario(ALL_THREE, false);
+check('N 三卡共存且顺序为 行情 → 预警 → 官方参考',
+      cardCount() === 3
+      && String(els['sections-container'].children[0].className).indexOf('section-card') >= 0
+      && String(els['sections-container'].children[1].className).indexOf('alert-card') >= 0
+      && String(els['sections-container'].children[2].className).indexOf('nbs-card') >= 0,
+      '卡片数=' + cardCount() + ' | ' + cardClasses());
+check('N 三卡共存时预警卡仍是橙色等级配色',
+      String(els['sections-container'].children[1].className).indexOf('lv-orange') >= 0, cardClasses());
+
 print('');
 print('共 ' + (passCount + failCount) + ' 项，失败 ' + failCount + ' 项');
 if (failCount > 0) { throw new Error('有前端断言失败'); }
@@ -302,6 +447,21 @@ css_check("存在「本次未更新」标记样式 .stale", ".stale {" in html)
 css_check("三种数据格式都能识别（crops / items / 数组）",
           "Array.isArray(payload.crops)" in html and "Array.isArray(payload.items)" in html
           and "Array.isArray(payload)" in html)
+
+# --- 官方参考卡片（国家统计局 · 蓝色系）---
+css_check("官方参考卡片样式 .nbs-card 存在", ".nbs-card {" in html)
+css_check("官方参考卡片用蓝色左边条（#1e90ff）",
+          "border-left: 8px solid #1e90ff" in css_block(".nbs-card"), css_block(".nbs-card"))
+css_check("官方参考卡片浅蓝底（与绿/橙卡区分）", "#eaf4fe" in css_block(".nbs-card"))
+css_check("官方参考卡片标题字号 >= 17px（实测 %s）" % px(".nbs-title"), px(".nbs-title") >= 17)
+css_check("分组标题样式 .nbs-group-title 存在", ".nbs-group-title {" in html)
+css_check("行情单位字号 <= 13px（实测 %s）" % px(".nbs-unit"), 0 < px(".nbs-unit") <= 13)
+css_check("红涨绿跌齐备：.nbs-pct.up 红 / .down 绿 / .flat 灰",
+          "#e53935" in css_block(".nbs-pct.up") and "#2e7d52" in css_block(".nbs-pct.down")
+          and "#7a8b99" in css_block(".nbs-pct.flat"))
+css_check("底部来源小字 .nbs-meta 字号 <= 13px（实测 %s）" % px(".nbs-meta"),
+          0 < px(".nbs-meta") <= 13)
+css_check("原文链接样式 .nbs-meta a 存在", ".nbs-meta a {" in html)
 
 
 
