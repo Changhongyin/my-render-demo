@@ -14,8 +14,8 @@
 ## 一、目录结构
 
 ```
-data.json                 ★ 历史台账 + 前端成品（本地留档）
-public/data.json          ★ 与上一份内容完全一致，供静态托管访问 ← 要上传的就是它
+data.json                 ★ 历史台账 + 前端成品（本地留档；已加入 .gitignore，不进版本库，历史见 backups/）
+public/data.json          ★ 与上一份内容完全一致，供静态托管访问 ← 要上传的就是它（已加入 .gitignore）
 public/farm.html          ★ 展示页（客户端 fetch /data.json）    ← 要上传的就是它
 public/index.html           早期"调云函数"版页面（后端已归档，不建议上传）
 local_spider_v2.py        ★ 本地数据生成脚本（抓取 + 历史累积 + 模拟补齐 + 自动备份，不连数据库）
@@ -39,7 +39,7 @@ tests/                      只测"还在用"的东西，全部不联网，可�
   ├── nbs_prices_test.py            ★ 国家统计局脚本 60 项自测（含"只动 nbs"验证）
   ├── check_farm_renders_current_data.py  用真实 data.json 冒烟检查展示页
   └── preview_v2_migration.py       用真实 data.json 做"模拟抓取"预览（带写盘护栏）
-docs/前端数据对接需求书.md    给前端同学的数据对接文档
+docs/                       对接文档：行情数据接入实施记录 / 气象预警接入说明 / 国家统计局数据接入说明
 archive_deprecated/         ★ 已废弃、不参与运行（清单见第十三节）
   ├── db-python/                Python 直连数据库方案（连接器 / 云函数 / 打包 / 测试）
   ├── cloud-fn-node/            Node.js 云函数方案（index.js / 打包脚本 / 测试 / zip）
@@ -208,6 +208,10 @@ cd /Users/user/Documents/my-render-demo
 cp backups/data_2026_09_18.json data.json
 cp backups/data_2026_09_18.json public/data.json
 ```
+
+> 注：`data.json` 与 `public/data.json` 是**每次运行都会重写的生成物**，已加入 `.gitignore`（不再进版本库，
+> 也不再用 Git 追踪它们的每日差异）。克隆仓库后先跑一次 `bash run_daily_update.sh`（或 `python3 local_spider_v2.py`）
+> 生成它们；要回退到历史某一天，用上面的 `cp` 从 `backups/` 恢复即可。
 
 ---
 

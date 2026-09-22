@@ -10,6 +10,11 @@ logs/
 # 每日数据备份（不必进版本库，恢复方法见 README）
 backups/
 
+# 每日生成的数据文件（run_daily_update.sh / local_spider_v2.py 每次运行都会重写；
+# 历史备份见 backups/，所以不必在 Git 里追踪它们的差异。克隆仓库后先跑一次流水线生成）
+/data.json
+/public/data.json
+
 # ⚠️ 如果以后把数据库密码写成独立配置文件，务必加在这里，别提交
 db_config.json
 local_config.py
