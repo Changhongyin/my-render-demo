@@ -21,7 +21,7 @@ public/index.html           早期"调云函数"版页面（后端已归档，�
 local_spider_v2.py        ★ 本地数据生成脚本（抓取 + 历史累积 + 模拟补齐 + 自动备份，不连数据库）
 fetch_weather_alerts.py   ★ 气象预警接入脚本（多来源可插拔 + --mock 联调；失败不写文件，详见 docs/气象预警接入说明.md）
 fetch_nbs_prices.py       ★ 国家统计局价格接入脚本（旬报农资/饲料成本 + CPI；只写 data.json 的 nbs 块，详见 docs/国家统计局数据接入说明.md）
-run_daily_update.sh       ★ 一键更新流水线：抓取行情 → 抓气象/统计局 → 完整性校验 → 上传腾讯云静态托管
+run_daily_update.sh       ★ 一键更新流水线：抓行情 → 抓气象/统计局 → 后端校验 → 同步到前端工程 → 前端构建 → 部署腾讯云静态托管
 run_daily_update.command    Finder 里双击即可运行的入口（跑完窗口保留，方便看结果）
 .env.example               气象预警 API 的配置模板（cp .env.example .env 后填写；.env 已被 git 忽略）
 backups/                    每次写入前的自动备份（只保留最近 7 份）
@@ -113,7 +113,7 @@ python3 tests/spider_v2_test.py
 
 ```bash
 cd /Users/user/Documents/my-render-demo
-bash run_daily_update.sh          # 完整流水线：抓取 → 校验 → 上传云端
+bash run_daily_update.sh          # 完整流水线：抓取 → 后端校验 → 同步前端 → 构建 → 部署上线
 # 或在 Finder 里双击 run_daily_update.command（效果相同，窗口保留方便看结果）
 ```
 
@@ -441,14 +441,34 @@ bash run_daily_update.sh
 
 | 步骤 | 实际命令 | 失败策略 |
 |---|---|---|
-| [1/5] 抓行情 | `python3 local_spider_v2.py` | **硬步骤**：失败立即停止，`data.json` 一个字节都不动 |
+| [1/8] 抓行情 | `python3 local_spider_v2.py` | **硬步骤**：失败立即停止，`data.json` 一个字节都不动 |
 | 🛡️ 防御网 | `python3 scripts/restore_foreign_blocks.py` | 从行情脚本写入前的备份补回 `weather` / `nbs` / meta 标注（正常时打印"无需恢复"） |
-| [2/5] 抓气象预警 | `python3 fetch_weather_alerts.py --write` | 软步骤（彩云无预警权限时默认不中断整条链） |
-| [3/5] 抓国家统计局 | `python3 fetch_nbs_prices.py` | 软步骤；只在每月 5/15/25 日跑（旬报 4/14/24 发布），`FORCE_NBS=1` 可强制 |
-| [4/5] 完整性校验 | crops / 价格 / 两份文件一致 / 新鲜度 | **硬步骤** |
-| [5/5] 云端同步 | `tcb hosting deploy public/data.json /data.json`<br>`tcb hosting deploy public/farm.html /farm.html` | 未配置环境 ID 或未登录 → 跳过并给出指引；`UPLOAD_STRICT=1` 可设为硬步骤 |
+| [2/8] 抓气象预警 | `python3 fetch_weather_alerts.py --write` | 软步骤（彩云无预警权限时默认不中断整条链） |
+| [3/8] 抓国家统计局 | `python3 fetch_nbs_prices.py` | 软步骤；只在每月 5/15/25 日跑（旬报 4/14/24 发布），`FORCE_NBS=1` 可强制 |
+| [4/8] 后端校验 | crops / 价格 / 两份文件一致 / 新鲜度 | **硬步骤** |
+| [5/8] 同步前端 | `cp public/data.json <前端工程>/public/data.json` | **硬步骤**：复制后逐字节比 sha256，不一致绝不进入构建 |
+| [6/8] 构建前端 | `<前端工程>` 里 `npm ci --ignore-scripts`（缺依赖时）→ `npm run build` | **硬步骤**：构建失败、`out/data.json` 与源数据指纹不一致、产物不新鲜 → 拒绝上线 |
+| [7/8] 部署上线 | `tcb hosting deploy <前端工程>/out/ / -e $TCB_ENV_ID --retry-count 3` | **硬步骤**：未装 CLI / 未配环境 ID / 上传失败 / 线上 `/data.json` 指纹与本地不符 → 立即停止 |
+| [7/8·补] 备用链接 | `tcb hosting deploy public/farm.html /farm.html -e $TCB_ENV_ID` | 软步骤：失败只记录（主站此时已上线，不受影响） |
+| [8/8] 收尾 | 摘要写进 `update.log`（日志各留最近 2000 行） | — |
 
-常用开关：`STRICT_ALL=1`（任何一步失败都致命）、`SKIP_UPLOAD=1`（只更新本地）、`FORCE_NBS=1`、`WEATHER_STRICT=1`、`NBS_STRICT=1`、`UPLOAD_STRICT=1`。
+常用开关：`SKIP_DEPLOY=1`（只跑到构建，不上传）、`SKIP_BUILD=1`（只跑到同步）、`DRY_RUN=1`（演练：不构建不部署）、`FRONTEND_DIR=/绝对路径`（指定前端工程）、`FORCE_NBS=1`、`STRICT_ALL=1` / `WEATHER_STRICT=1` / `NBS_STRICT=1`（把软步骤设为致命）。
+
+### 前端工程目录怎么找（`FRONTEND_DIR`）
+
+前端是静态导出站点：`data.json` 会被打进 `out/`，所以**光更新后端数据网页不会变**，必须"同步 → 重新构建 → 重新部署"。脚本按顺序自动探测（也可在 `.env` 写 `FRONTEND_DIR=/绝对路径` 固定）：
+
+1. `/Users/user/Desktop/yuntian-static-最新`
+2. `/Users/user/Desktop/yuntian-static-已对接行情与气象预警`
+3. `~/Desktop/yuntian-static*`（取最近修改的一个）
+
+判定标准：同时存在 `package.json` + `next.config.ts` + `src/lib/market-live.ts`。**显式指定了 `FRONTEND_DIR` 就不再自动探测**：路径无效会在 [5/8] 直接失败（避免"以为在改 A、其实改了 B"）。
+
+### 上线复核：怎么确认"网页真的换了数据"
+
+部署完成后脚本会拉一次线上 `/data.json`（最多 5 次、间隔 3 秒，等 CDN 生效），与本地刚构建的 `out/data.json` 比 sha256；一致才算成功，不一致直接判失败并写进 `update_error.log`。站点域名优先读 `.env` 的 `SITE_URL`，没配就用 `tcb hosting detail` 自动读。
+
+> CloudBase CLI 的 `--verify` 在本环境会误报"一致性校验失败：missing=…"（文件其实已上传成功），所以脚本**故意不用它**，改用上面这条自己实现的公网指纹复核。
 
 ### 云端上传的一次性配置
 
@@ -460,7 +480,10 @@ tcb env list                    # 验证登录成功（能看到环境列表即 
 #   TCB_ENV_ID=your-env-id
 ```
 
-配好后再跑一次，第 [5/5] 步会显示：`✅ 已上传：public/data.json → /data.json、public/farm.html → /farm.html`。
+配好后再跑一次，第 [7/8] 步会显示：`✅ 已部署并复核一致（https://…/data.json 指纹 … 与本地一致）`。
+
+> 注意：流水线部署的是**前端整站** `<前端工程>/out/`；紧接着还会单独把后端原型页
+> `public/farm.html` 传一份到 `/farm.html` 作为**备用链接**（失败只记录、不影响主站）。
 
 ### 为什么不做定时任务（2026-09-19 实测结论）
 
