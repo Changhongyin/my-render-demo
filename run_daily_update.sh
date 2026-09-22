@@ -10,7 +10,8 @@
 #   一条命令跑完：抓数据 → 同步到前端工程 → 前端构建 → 部署到腾讯云静态托管
 #
 #   [1/8] 抓行情      python3 local_spider_v2.py              → crops（硬步骤）
-#   [2/8] 抓气象预警  python3 fetch_weather_alerts.py --write  → weather（软步骤，见下）
+#   [2/8] 抓气象预警  fetch_weather_alerts_v3.py（WeatherAPI，有真实预警就写）→ 不行再回退
+#                     fetch_weather_alerts.py --write（彩云/apihz/generic/mock）→ weather（软步骤，见下）
 #   [3/8] 抓统计局    python3 fetch_nbs_prices.py              → nbs（软步骤，仅在每月 5/15/25 日跑）
 #   [4/8] 后端校验    data.json 结构 / 两份一致 / 新鲜度（硬步骤）
 #   [5/8] 同步前端    public/data.json → <前端工程>/public/data.json（逐字节校验，硬步骤）
@@ -279,18 +280,32 @@ else
   echo "   🛡️  ${GUARD_LINE:-（无输出）}"
 fi
 
-# ---------- [2/8] 气象预警（软步骤） ----------
-echo "▶ [2/8] 抓取气象预警：fetch_weather_alerts.py --write"
-if "$PYTHON" fetch_weather_alerts.py --write >>"$TMP2" 2>&1; then
-  WEATHER_RESULT="✅ 已更新"
-  echo "   ✅ 气象预警已更新"
-else
-  if [ "$WEATHER_STRICT" = "1" ]; then
-    fail "气象预警抓取（fetch_weather_alerts.py，WEATHER_STRICT=1）" "$TMP2"
+# ---------- [2/8] 气象预警（软步骤；先试 WeatherAPI v3，不成功再走原有来源） ----------
+echo "▶ [2/8] 抓取气象预警：先试 WeatherAPI v3 → 不行再回退原有来源"
+WEATHER_RESULT=""
+if [ -f fetch_weather_alerts_v3.py ]; then
+  if "$PYTHON" fetch_weather_alerts_v3.py --no-raw >>"$TMP2" 2>&1; then
+    V3_LINE="$(grep -E '归属校验通过|当前 [0-9]+ 条生效预警' "$TMP2" | tail -2 | tr '\n' ' ' | sed 's/^ *//' || true)"
+    WEATHER_RESULT="✅ 已更新（WeatherAPI 真实预警：${V3_LINE:-见 update.log}）"
+    echo "   ✅ WeatherAPI v3 已写入真实预警：${V3_LINE:-见日志}"
+  else
+    V3_CODE=$?
+    note "WeatherAPI v3 未写入预警（退出码 ${V3_CODE}：2=响应无 alerts 字段 / 3=当前无生效预警 / 5=预警与本地不符（拒绝写入）/ 4=接口报错 / 1=网络异常）。原有兜底逻辑保持不变" "$TMP2"
+    echo "   ⚠️ WeatherAPI v3 无可用预警（退出码 ${V3_CODE}，已记录），回退原有来源"
   fi
-  WEATHER_RESULT="⚠️ 未更新（软步骤，已记录）"
-  note "气象预警未更新（可选数据源；data.json 里的旧预警保持原样）" "$TMP2"
-  echo "   ⚠️ 气象预警未更新（软步骤，已记录到 update_error.log），继续"
+fi
+if [ -z "$WEATHER_RESULT" ]; then
+  if "$PYTHON" fetch_weather_alerts.py --write >>"$TMP2" 2>&1; then
+    WEATHER_RESULT="✅ 已更新（原有来源）"
+    echo "   ✅ 气象预警已更新（原有来源）"
+  else
+    if [ "$WEATHER_STRICT" = "1" ]; then
+      fail "气象预警抓取（fetch_weather_alerts.py，WEATHER_STRICT=1）" "$TMP2"
+    fi
+    WEATHER_RESULT="⚠️ 未更新（软步骤，已记录）"
+    note "气象预警未更新（WeatherAPI v3 与原有来源都没写出预警；data.json 里的旧预警/Mock 兜底保持原样）" "$TMP2"
+    echo "   ⚠️ 气象预警未更新（软步骤，已记录到 update_error.log），继续"
+  fi
 fi
 
 # ---------- [3/8] 国家统计局（软步骤，仅每月 5/15/25 日） ----------
