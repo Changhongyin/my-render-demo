@@ -34,10 +34,13 @@
 #   前端是静态导出站点，data.json 会作为静态资源被打进 out/ 目录，
 #   所以光更新后端 data.json 不会让网页变化，必须"同步 → 重新构建 → 重新部署"。
 #   目录默认按顺序自动探测（也可在 .env 写 FRONTEND_DIR=/绝对路径 固定）：
-#     1) /Users/user/Desktop/yuntian-static-最新
-#     2) /Users/user/Desktop/yuntian-static-已对接行情与气象预警
-#     3) ~/Desktop/yuntian-static*（取最近修改的一个）
-#   判定标准：存在 package.json + next.config.ts + src/lib/market-live.ts（已对接后端数据的工程）
+#     1) /Users/user/Desktop/yuntian-static-v2                ← 当前使用（新版：气象预警适配层 + 官方溯源）
+#     2) /Users/user/Desktop/yuntian-static-最新
+#     3) /Users/user/Desktop/yuntian-static-已对接行情与气象预警
+#     4) ~/Desktop/yuntian-static*（取最近修改的一个）
+#   判定标准：存在 package.json + next.config.ts + src/lib 下任一"已对接后端数据"的标记：
+#             · weather-live.ts  （新版 yuntian-static-v2 的气象预警适配层）
+#             · market-live.ts   （旧版行情注入工程）
 #
 # 为什么气象预警"失败"是预期行为，而不是 Bug（接手的人请先读这段）：
 #   彩云天气【免费版没有预警权限】：请求会返回 HTTP 200 + status=ok，但响应里【不包含 result.alert】
@@ -127,14 +130,17 @@ TCB_BIN="$(command -v tcb 2>/dev/null || command -v cloudbase 2>/dev/null || tru
 FRONTEND_DIR="${FRONTEND_DIR:-$(read_env_value FRONTEND_DIR)}"
 is_frontend_dir() {   # 认得出"已对接后端数据的前端工程"
   local d="$1"
-  [ -n "$d" ] && [ -d "$d" ] && [ -f "$d/package.json" ] && [ -f "$d/next.config.ts" ] \
-    && [ -f "$d/src/lib/market-live.ts" ]
+  [ -n "$d" ] && [ -d "$d" ] || return 1
+  [ -f "$d/package.json" ] && [ -f "$d/next.config.ts" ] || return 1
+  # 对接标记：新版 yuntian-static-v2 是 weather-live.ts；旧版行情注入工程是 market-live.ts
+  [ -f "$d/src/lib/weather-live.ts" ] || [ -f "$d/src/lib/market-live.ts" ]
 }
 if [ -n "$FRONTEND_DIR" ]; then
   FRONTEND_DIR_SOURCE="指定"
 else
   FRONTEND_DIR_SOURCE="自动探测"
   for cand in \
+      "/Users/user/Desktop/yuntian-static-v2" \
       "/Users/user/Desktop/yuntian-static-最新" \
       "/Users/user/Desktop/yuntian-static-已对接行情与气象预警"; do
     if is_frontend_dir "$cand"; then FRONTEND_DIR="$cand"; break; fi
@@ -222,7 +228,7 @@ if [ -n "$FRONTEND_DIR" ] && is_frontend_dir "$FRONTEND_DIR"; then
   fi
 elif [ -n "$FRONTEND_DIR" ]; then
   echo "   · 前端工程目录：❌ ${FRONTEND_DIR}（${FRONTEND_DIR_SOURCE}，但不是有效的已对接工程）"
-  echo "                    → 有效工程需同时存在：package.json / next.config.ts / src/lib/market-live.ts"
+  echo "                    → 有效工程需同时存在：package.json / next.config.ts / src/lib/weather-live.ts（新版）或 src/lib/market-live.ts（旧行情注入版）"
   echo "                    → [5/8] 步会立即停止（不会擅自换目录，避免改错地方）"
 else
   echo "   · 前端工程目录：❌ 没找到（会在 [5/8] 步失败）"
@@ -361,8 +367,9 @@ echo "▶ [5/8] 同步 data.json 到前端工程"
 SYNC_RESULT=""
 if [ -z "$FRONTEND_DIR" ]; then
   {
-    printf '没有找到"已对接后端数据"的前端工程目录（需要同时存在 package.json / next.config.ts / src/lib/market-live.ts）。\n'
+    printf '没有找到"已对接后端数据"的前端工程目录（需要同时存在 package.json / next.config.ts / src/lib/weather-live.ts 或 market-live.ts）。\n'
     printf '已尝试：\n'
+    printf '  · %s\n' "/Users/user/Desktop/yuntian-static-v2"
     printf '  · %s\n' "/Users/user/Desktop/yuntian-static-最新"
     printf '  · %s\n' "/Users/user/Desktop/yuntian-static-已对接行情与气象预警"
     printf '  · %s\n' "$HOME/Desktop/yuntian-static*（最近修改的一个）"
@@ -372,7 +379,7 @@ if [ -z "$FRONTEND_DIR" ]; then
 elif ! is_frontend_dir "$FRONTEND_DIR"; then
   {
     printf 'FRONTEND_DIR 指向的不是有效的"已对接工程"：%s\n' "$FRONTEND_DIR"
-    printf '需要同时存在：package.json / next.config.ts / src/lib/market-live.ts\n'
+    printf '需要同时存在：package.json / next.config.ts / src/lib/weather-live.ts（新版）或 market-live.ts（旧版）\n'
     printf '处理：改成正确的绝对路径，或去掉 FRONTEND_DIR 让脚本自动探测 ~/Desktop/yuntian-static*\n'
   } >"$TMP5"
   fail "同步前端（FRONTEND_DIR 无效 —— 不会擅自换目录）" "$TMP5"
@@ -512,6 +519,18 @@ else
           note "线上 /index.html 与本地构建产物不一致（可能 CDN 缓存）。页面上的日期/价格来自 /data.json（已复核为最新），如需强刷可清 CDN 缓存" ""
           echo "   ⚠️ 线上 /index.html 与本地不一致（可能 CDN 缓存），但页面数据已是最新的"
         fi
+
+        # 体检：线上 HTML 必须能被浏览器【直接渲染】。
+        # 若托管/存储桶给响应加了 content-disposition: attachment，用户点开网址会变成"下载文件"
+        # 而不是打开网页 —— 这属于托管侧配置问题，流水线不擅自失败，但必须每次都如实告警并写进日志。
+        CDISP="$(curl -s -D - -o /dev/null --max-time 20 "$SITE_ROOT/" 2>/dev/null | tr -d '\r' | grep -i '^content-disposition:' | head -1 || true)"
+        case "$CDISP" in
+          *[Aa]ttachment*)
+            PAGE_RESULT="${PAGE_RESULT}｜⚠️ 线上 HTML 带 content-disposition: attachment（浏览器会下载而不是打开页面）"
+            note "线上站点返回 content-disposition: attachment —— 用户访问网址会下载 index.html 而不是渲染网页。请在腾讯云 CloudBase 控制台检查「静态托管 / 存储桶默认响应头」，或绑定自定义域名后再对外发布" ""
+            echo "   ⚠️ 线上 HTML 被强制下载（content-disposition: attachment）→ 已记录，需在托管侧处理"
+            ;;
+        esac
       fi
     else
       { printf '线上 /data.json 与本地构建产物指纹不一致（可能被 CDN 缓存或上传未完全生效）：\n'

@@ -460,13 +460,14 @@ bash run_daily_update.sh
 
 ### 前端工程目录怎么找（`FRONTEND_DIR`）
 
-前端是静态导出站点：`data.json` 会被打进 `out/`，所以**光更新后端数据网页不会变**，必须"同步 → 重新构建 → 重新部署"。脚本按顺序自动探测（也可在 `.env` 写 `FRONTEND_DIR=/绝对路径` 固定）：
+前端是静态导出站点：`data.json` 会被打进 `out/`，所以**光更新后端数据网页不会变**，必须"同步 → 重新构建 → 重新部署"。脚本按顺序自动探测（也可在 `.env` 写 `FRONTEND_DIR=/绝对路径` 固定；**本机 `.env` 已固定为 `/Users/user/Desktop/yuntian-static-v2`**）：
 
-1. `/Users/user/Desktop/yuntian-static-最新`
-2. `/Users/user/Desktop/yuntian-static-已对接行情与气象预警`
-3. `~/Desktop/yuntian-static*`（取最近修改的一个）
+1. `/Users/user/Desktop/yuntian-static-v2`（当前使用：新版 —— 气象预警适配层 + 官方溯源链接 + mock/live 标注）
+2. `/Users/user/Desktop/yuntian-static-最新`
+3. `/Users/user/Desktop/yuntian-static-已对接行情与气象预警`
+4. `~/Desktop/yuntian-static*`（取最近修改的一个）
 
-判定标准：同时存在 `package.json` + `next.config.ts` + `src/lib/market-live.ts`。**显式指定了 `FRONTEND_DIR` 就不再自动探测**：路径无效会在 [5/8] 直接失败（避免"以为在改 A、其实改了 B"）。
+判定标准：同时存在 `package.json` + `next.config.ts` + `src/lib/weather-live.ts`（新版）**或** `src/lib/market-live.ts`（旧版行情注入工程）。**显式指定了 `FRONTEND_DIR` 就不再自动探测**：路径无效会在 [5/8] 直接失败（避免"以为在改 A、其实改了 B"）。
 
 ### 上线复核：怎么确认"网页真的换了数据"
 
