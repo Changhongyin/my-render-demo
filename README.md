@@ -448,7 +448,7 @@ bash run_daily_update.sh
 | [4/8] 后端校验 | crops / 价格 / 两份文件一致 / 新鲜度 | **硬步骤** |
 | [5/8] 同步前端 | `cp public/data.json <前端工程>/public/data.json` | **硬步骤**：复制后逐字节比 sha256，不一致绝不进入构建 |
 | [6/8] 构建前端 | `<前端工程>` 里 `npm ci --ignore-scripts`（缺依赖时）→ `npm run build` | **硬步骤**：构建失败、`out/data.json` 与源数据指纹不一致、产物不新鲜 → 拒绝上线 |
-| [7/8] 部署上线 | `tcb hosting deploy <前端工程>/out/ / -e $TCB_ENV_ID --retry-count 3` | **硬步骤**：未装 CLI / 未配环境 ID / 上传失败 / 线上 `/data.json` 指纹与本地不符 → 立即停止 |
+| [7/8] 部署上线 | `tcb hosting deploy <前端工程>/out/ / -e $TCB_ENV_ID --retry-count 3` | **硬步骤**：未装 CLI / 未配环境 ID / 上传失败 / 线上 `/data.json` 指纹与本地不符 → 立即停止；随后顺带复核线上 `/index.html` 也是本次构建产物（不一致只告警，多为 CDN 缓存） |
 | [7/8·补] 备用链接 | `tcb hosting deploy public/farm.html /farm.html -e $TCB_ENV_ID` | 软步骤：失败只记录（主站此时已上线，不受影响） |
 | [8/8] 收尾 | 摘要写进 `update.log`（日志各留最近 2000 行） | — |
 

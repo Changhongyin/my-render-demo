@@ -16,7 +16,8 @@
 #   [5/8] 同步前端    public/data.json → <前端工程>/public/data.json（逐字节校验，硬步骤）
 #   [6/8] 构建前端    <前端工程> 里 npm run build → out/（产物与源数据逐字节校验，硬步骤）
 #   [7/8] 部署上线    tcb hosting deploy <前端工程>/out/ / -e ${TCB_ENV_ID}（硬步骤）
-#                     ＋ 拿到站点域名时，复核线上 /data.json 指纹与本地一致
+#                     ＋ 拿到站点域名时，复核线上 /data.json 指纹与本地一致（硬：不一致即失败）
+#                     ＋ 顺带复核线上 /index.html 也是本次构建产物（不一致只告警，防 CDN 误判）
 #                     ＋ 追加一行把 public/farm.html 传到 /farm.html（备用链接，失败只记录）
 #   [8/8] 收尾        成功摘要写进 update.log
 #
@@ -430,6 +431,7 @@ fi
 echo "▶ [7/8] 部署到腾讯云静态托管"
 DEPLOY_RESULT=""
 FARM_RESULT=""
+PAGE_RESULT=""
 SITE_ROOT=""
 auto_site_url() {   # 没配 SITE_URL 时，尝试从 `tcb hosting detail` 里读站点域名
   if [ -n "$SITE_URL" ]; then echo "$SITE_URL"; return 0; fi
@@ -475,6 +477,27 @@ else
     if [ "$REMOTE_HASH" = "$DST_HASH" ]; then
       DEPLOY_RESULT="✅ 已部署并复核一致（${SITE_ROOT}/data.json 指纹 ${REMOTE_HASH:0:12}… 与本地一致）"
       echo "   ✅ 线上复核通过：${SITE_ROOT}/data.json 指纹与本地一致"
+
+      # 顺带复核首页 HTML 也是本次构建的产物：说明"整页换了"，而不只是数据换了。
+      # 注意：index.html 不一致只告警不判失败 —— 页面上的日期/价格是运行时从 /data.json 拉的，
+      # 数据这一层已经用上面的指纹证明是新的；HTML 差异多半只是 CDN 缓存。
+      if [ -f "$FRONTEND_OUT/index.html" ]; then
+        LOCAL_INDEX_HASH="$(shasum -a 256 "$FRONTEND_OUT/index.html" | awk '{print $1}')"
+        REMOTE_INDEX_HASH=""
+        for attempt in 1 2 3 4 5; do
+          REMOTE_INDEX_HASH="$(curl -sS --max-time 20 "$SITE_ROOT/index.html?t=$(date '+%s')" 2>/dev/null | shasum -a 256 | awk '{print $1}' || true)"
+          [ "$REMOTE_INDEX_HASH" = "$LOCAL_INDEX_HASH" ] && break
+          sleep 3
+        done
+        if [ "$REMOTE_INDEX_HASH" = "$LOCAL_INDEX_HASH" ]; then
+          PAGE_RESULT="✅ 首页 HTML 与本地本次构建一致（指纹 ${LOCAL_INDEX_HASH:0:12}…）"
+          echo "   ✅ 首页复核通过：/index.html 指纹与本地一致"
+        else
+          PAGE_RESULT="⚠️ 首页 HTML 与本地不一致（多半是 CDN 缓存；页面数据仍取自最新的 /data.json）"
+          note "线上 /index.html 与本地构建产物不一致（可能 CDN 缓存）。页面上的日期/价格来自 /data.json（已复核为最新），如需强刷可清 CDN 缓存" ""
+          echo "   ⚠️ 线上 /index.html 与本地不一致（可能 CDN 缓存），但页面数据已是最新的"
+        fi
+      fi
     else
       { printf '线上 /data.json 与本地构建产物指纹不一致（可能被 CDN 缓存或上传未完全生效）：\n'
         printf '  站点：%s/data.json\n  本地：%s\n  线上：%s\n' "$SITE_ROOT" "$DST_HASH" "${REMOTE_HASH:-（取不到）}"
@@ -519,6 +542,7 @@ HASH_AFTER="$(shasum -a 256 data.json public/data.json | awk '{print $1}' | tr '
   printf '  同步前端：%s\n' "$SYNC_RESULT"
   printf '  构建前端：%s\n' "$BUILD_RESULT"
   printf '  部署上线：%s\n' "$DEPLOY_RESULT"
+  printf '  页面复核：%s\n' "${PAGE_RESULT:-—}"
   printf '  备用链接：%s\n' "${FARM_RESULT:-—}"
   printf '  前端工程：%s\n' "$FRONTEND_DIR"
   printf '  指纹    ：%s→ %s\n' "$HASH_BEFORE" "$HASH_AFTER"
@@ -534,6 +558,7 @@ echo "   后端校验：$CHECK_LINE"
 echo "   同步前端：$SYNC_RESULT"
 echo "   构建前端：$BUILD_RESULT"
 echo "   部署上线：$DEPLOY_RESULT"
+echo "   页面复核：${PAGE_RESULT:-—}"
 echo "   备用链接：${FARM_RESULT:-—}"
 [ -n "$SITE_ROOT" ] && echo "   站点地址：$SITE_ROOT"
 echo "   日志    ：update.log（成功摘要）｜ update_error.log（失败/跳过的详情）"
